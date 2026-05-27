@@ -1,0 +1,67 @@
+use std::sync::Arc;
+
+use poise::serenity_prelude as serenity;
+
+use crate::context::BotData;
+use crate::ids::parse_mod_timeout_modal;
+use crate::util::modal_field;
+
+/// "Timeout User" context-menu modal submitted (`m:timeout:{target_id}`).
+pub async fn handle(
+    ctx: &serenity::Context,
+    data: &Arc<BotData>,
+    mi: &serenity::ModalInteraction,
+) -> Result<(), anyhow::Error> {
+    let target_id = parse_mod_timeout_modal(&mi.data.custom_id).unwrap_or(0);
+    let Some(guild_id) = mi.guild_id else {
+        return Ok(());
+    };
+    let reason = modal_field(&mi.data.components, "reason")
+        .unwrap_or("No reason given")
+        .to_string();
+    let duration_str = modal_field(&mi.data.components, "duration").unwrap_or("3600");
+    let secs: i64 = duration_str.trim().parse().unwrap_or(3600);
+
+    let until = serenity::Timestamp::from_unix_timestamp(
+        serenity::Timestamp::now().unix_timestamp() + secs,
+    )
+    .map_err(|_| anyhow::anyhow!("Invalid timestamp"))?;
+
+    let until_str = until
+        .to_rfc3339()
+        .ok_or_else(|| anyhow::anyhow!("Failed to format timeout timestamp"))?;
+
+    guild_id
+        .edit_member(
+            ctx,
+            serenity::UserId::new(target_id),
+            serenity::EditMember::new().disable_communication_until(until_str),
+        )
+        .await
+        .ok();
+
+    let expires_at = until.to_rfc3339();
+    data.db
+        .create_infraction(
+            &guild_id.to_string(),
+            &target_id.to_string(),
+            &mi.user.id.to_string(),
+            "timeout",
+            &reason,
+            Some(secs),
+            true,
+            expires_at.as_deref(),
+        )
+        .await?;
+
+    mi.create_response(
+        ctx,
+        serenity::CreateInteractionResponse::Message(
+            serenity::CreateInteractionResponseMessage::new()
+                .ephemeral(true)
+                .content(format!("⏱️ <@{}> timed out.", target_id)),
+        ),
+    )
+    .await?;
+    Ok(())
+}
