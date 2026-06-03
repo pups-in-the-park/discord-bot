@@ -65,8 +65,7 @@ pub async fn handle(
                     &ctx.http,
                     &target,
                     guild_id,
-                    "⚠️ Warning",
-                    &reason,
+                    crate::features::moderation::service::ModActionDm::Warn { reason: &reason },
                     Some((infraction.id, guild_id)),
                 )
                 .await;
@@ -108,8 +107,7 @@ pub async fn handle(
                     &ctx.http,
                     &target,
                     guild_id,
-                    "⚠️ Warning (message deleted)",
-                    &reason,
+                    crate::features::moderation::service::ModActionDm::Warn { reason: &reason },
                     Some((infraction.id, guild_id)),
                 )
                 .await;
@@ -195,8 +193,7 @@ pub async fn handle(
                     &ctx.http,
                     &target,
                     guild_id,
-                    "🔨 Banned",
-                    &reason,
+                    crate::features::moderation::service::ModActionDm::Ban { reason: &reason },
                     appeal_info,
                 )
                 .await;
