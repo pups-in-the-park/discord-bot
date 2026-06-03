@@ -1,0 +1,10 @@
+[bot]
+token = "YOUR_BOT_TOKEN_HERE"
+environment = "development"   # "development" | "production"
+log_level = "info"
+
+[database]
+path = "./pip.db"
+
+[guild]
+id = 123456789012345678
