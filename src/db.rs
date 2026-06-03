@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool};
 use sqlx::Row;
 use std::str::FromStr;
 
@@ -282,52 +282,22 @@ pub struct Database {
 
 impl Database {
     pub async fn new(url: &str) -> Result<Self> {
-        let options = SqliteConnectOptions::from_str(url)?.create_if_missing(true);
+        // Connection-level settings (not schema): WAL for concurrency, foreign keys
+        // on for every connection. These belong here, not in a migration — SQLite
+        // can't switch journal mode inside the transaction sqlx wraps migrations in.
+        let options = SqliteConnectOptions::from_str(url)?
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .foreign_keys(true);
         let pool = SqlitePool::connect_with(options).await?;
         Ok(Self { pool })
     }
 
+    /// Apply any pending migrations from `./migrations` (embedded at compile time).
+    /// sqlx tracks applied versions in `_sqlx_migrations`, so this auto-resolves
+    /// what still needs to run and is safe to call on every startup.
     pub async fn migrate(&self) -> Result<()> {
-        sqlx::query("PRAGMA journal_mode=WAL").execute(&self.pool).await?;
-        sqlx::query("PRAGMA foreign_keys=ON").execute(&self.pool).await?;
-        let sql = include_str!("../migrations/001_schema.sql");
-        for stmt in sql.split(';') {
-            let stmt = stmt.trim();
-            if !stmt.is_empty() {
-                sqlx::query(stmt).execute(&self.pool).await?;
-            }
-        }
-
-        // Additive column migrations for pre-existing DBs. `CREATE TABLE IF NOT
-        // EXISTS` won't add columns to a table that already exists, and SQLite has
-        // no `IF NOT EXISTS` for columns, so we ignore the "duplicate column name"
-        // error — making these idempotent across reboots.
-        let additive = [
-            "ALTER TABLE reports ADD COLUMN profile_parts TEXT",
-            "ALTER TABLE concerns ADD COLUMN target_moderator_id TEXT",
-            "ALTER TABLE concerns ADD COLUMN reviewed_at TEXT",
-            "ALTER TABLE blocklist ADD COLUMN expires_at TEXT",
-        ];
-        for stmt in additive {
-            if let Err(e) = sqlx::query(stmt).execute(&self.pool).await {
-                tracing::debug!("additive migration skipped ({stmt}): {e}");
-            }
-        }
-
-        // One-time blocklist scope rewrite: legacy `global`/`{category}` -> typed
-        // scopes (`tickets` / `ticket:{name}`). Idempotent — re-runs match nothing.
-        let rewrites = [
-            "UPDATE blocklist SET scope='tickets' WHERE scope='global'",
-            "UPDATE blocklist SET scope='ticket:'||scope \
-             WHERE scope NOT IN ('tickets','reports','concerns','appeals') \
-             AND scope NOT LIKE 'ticket:%'",
-        ];
-        for stmt in rewrites {
-            if let Err(e) = sqlx::query(stmt).execute(&self.pool).await {
-                tracing::warn!("blocklist scope rewrite failed ({stmt}): {e}");
-            }
-        }
-
+        sqlx::migrate!("./migrations").run(&self.pool).await?;
         tracing::info!("Migrations applied");
         Ok(())
     }

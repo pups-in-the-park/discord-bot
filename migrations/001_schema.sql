@@ -1,5 +1,6 @@
-PRAGMA journal_mode=WAL;
-PRAGMA foreign_keys=ON;
+-- Baseline schema. Connection-level pragmas (WAL journal mode, foreign keys) are
+-- configured on the pool in `Database::new`, not here — they can't run inside the
+-- transaction sqlx wraps each migration in.
 
 -- ── Guild configuration ───────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS guild_config (
@@ -166,13 +167,12 @@ CREATE INDEX IF NOT EXISTS idx_messages_ticket ON ticket_messages(ticket_id, sen
 
 -- ── Blocklist (replaces blacklist, supports scope) ────────────────────────────
 CREATE TABLE IF NOT EXISTS blocklist (
-    guild_id   TEXT    NOT NULL,
-    user_id    TEXT    NOT NULL,
-    scope      TEXT    NOT NULL DEFAULT 'tickets', -- tickets | ticket:{name} | reports | concerns | appeals
-    reason     TEXT    NOT NULL,
-    added_by   TEXT    NOT NULL,
-    added_at   TEXT    NOT NULL DEFAULT (datetime('now')),
-    expires_at TEXT,                                -- NULL = permanent
+    guild_id TEXT    NOT NULL,
+    user_id  TEXT    NOT NULL,
+    scope    TEXT    NOT NULL DEFAULT 'global',  -- 'global' or ticket_type name
+    reason   TEXT    NOT NULL,
+    added_by TEXT    NOT NULL,
+    added_at TEXT    NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (guild_id, user_id, scope)
 );
 
@@ -239,8 +239,7 @@ CREATE TABLE IF NOT EXISTS reports (
     status          TEXT NOT NULL DEFAULT 'open',  -- open|action_taken|no_action
     resolved_by     TEXT,
     concern_raised  INTEGER NOT NULL DEFAULT 0,
-    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-    profile_parts   TEXT                -- comma-joined profile-part codes (user/profile reports)
+    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_reports_guild  ON reports(guild_id, status);
 CREATE INDEX IF NOT EXISTS idx_reports_thread ON reports(thread_id);
@@ -255,9 +254,7 @@ CREATE TABLE IF NOT EXISTS concerns (
     reason      TEXT NOT NULL,
     status      TEXT NOT NULL DEFAULT 'pending',  -- pending|reviewed
     reviewed_by TEXT,
-    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-    target_moderator_id TEXT,            -- moderator whose decision this concern challenges
-    reviewed_at TEXT                     -- when an admin marked it reviewed
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_concerns_guild ON concerns(guild_id, status);
 
