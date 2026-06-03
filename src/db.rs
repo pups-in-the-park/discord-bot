@@ -246,6 +246,15 @@ pub struct Concern {
     pub reviewed_at: Option<String>,
 }
 
+/// Per-moderator concern tally for `/concerns stats`.
+#[derive(Debug, Clone)]
+pub struct ConcernStat {
+    pub moderator_id: Option<String>,
+    pub total: i64,
+    pub denied_appeals: i64,
+    pub dismissed_reports: i64,
+}
+
 #[derive(Debug, Clone)]
 pub struct RaidConfig {
     pub guild_id: String,
@@ -1369,6 +1378,16 @@ impl Database {
         Ok(row.as_ref().map(Self::map_appeal))
     }
 
+    pub async fn get_appeal_by_id(&self, id: i64) -> Result<Option<Appeal>> {
+        let row = sqlx::query(
+            "SELECT id,guild_id,infraction_id,user_id,thread_id,card_message_id,reason,
+             status,response,responded_by,created_at,responded_at
+             FROM appeals WHERE id=?",
+        )
+        .bind(id).fetch_optional(&self.pool).await?;
+        Ok(row.as_ref().map(Self::map_appeal))
+    }
+
     pub async fn get_appeal_for_infraction(&self, infraction_id: i64) -> Result<Option<Appeal>> {
         let row = sqlx::query(
             "SELECT id,guild_id,infraction_id,user_id,thread_id,card_message_id,reason,
@@ -1527,20 +1546,21 @@ impl Database {
         kind: &str,
         source_id: i64,
         reason: &str,
+        target_moderator_id: Option<&str>,
     ) -> Result<Concern> {
         let row = sqlx::query(
-            "INSERT INTO concerns (guild_id,user_id,kind,source_id,reason)
-             VALUES (?,?,?,?,?)
+            "INSERT INTO concerns (guild_id,user_id,kind,source_id,reason,target_moderator_id)
+             VALUES (?,?,?,?,?,?)
              RETURNING id,guild_id,user_id,kind,source_id,reason,status,reviewed_by,created_at,
                        target_moderator_id,reviewed_at",
         )
-        .bind(guild_id).bind(user_id).bind(kind).bind(source_id).bind(reason)
+        .bind(guild_id).bind(user_id).bind(kind).bind(source_id).bind(reason).bind(target_moderator_id)
         .fetch_one(&self.pool).await?;
         Ok(Self::map_concern(&row))
     }
 
     pub async fn mark_concern_reviewed(&self, concern_id: i64, reviewed_by: &str) -> Result<()> {
-        sqlx::query("UPDATE concerns SET status='reviewed',reviewed_by=? WHERE id=?")
+        sqlx::query("UPDATE concerns SET status='reviewed',reviewed_by=?,reviewed_at=datetime('now') WHERE id=?")
             .bind(reviewed_by).bind(concern_id).execute(&self.pool).await?;
         Ok(())
     }
@@ -1553,6 +1573,49 @@ impl Database {
         )
         .bind(id).fetch_optional(&self.pool).await?;
         Ok(row.as_ref().map(Self::map_concern))
+    }
+
+    /// Concern counts grouped by the moderator whose decision was challenged,
+    /// most-challenged first.
+    pub async fn concern_stats(&self, guild_id: &str) -> Result<Vec<ConcernStat>> {
+        let rows = sqlx::query(
+            "SELECT target_moderator_id,
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN kind='appeal' THEN 1 ELSE 0 END) AS denied_appeals,
+                    SUM(CASE WHEN kind='report' THEN 1 ELSE 0 END) AS dismissed_reports
+             FROM concerns WHERE guild_id=?
+             GROUP BY target_moderator_id
+             ORDER BY total DESC",
+        )
+        .bind(guild_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|r| ConcernStat {
+                moderator_id: r.get("target_moderator_id"),
+                total: r.get("total"),
+                denied_appeals: r.get("denied_appeals"),
+                dismissed_reports: r.get("dismissed_reports"),
+            })
+            .collect())
+    }
+
+    /// Pending vs reviewed concern counts for a guild.
+    pub async fn concern_status_counts(&self, guild_id: &str) -> Result<(i64, i64)> {
+        let row = sqlx::query(
+            "SELECT
+                SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) AS pending,
+                SUM(CASE WHEN status='reviewed' THEN 1 ELSE 0 END) AS reviewed
+             FROM concerns WHERE guild_id=?",
+        )
+        .bind(guild_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok((
+            row.get::<Option<i64>, _>("pending").unwrap_or(0),
+            row.get::<Option<i64>, _>("reviewed").unwrap_or(0),
+        ))
     }
 
     // ── Raid config ───────────────────────────────────────────────────────────

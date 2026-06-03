@@ -260,6 +260,8 @@ fn commands() -> Vec<poise::Command<BotData, BotError>> {
         features::moderation::unban(),
         features::moderation::history(),
         features::appeals::appeal(),
+        // ── Concerns ─────────────────────────────────────────────
+        features::concerns::concerns(),
         // ── Roles ─────────────────────────────────────────────────
         features::roles::role(),
         // ── Reports ──────────────────────────────────────────────
