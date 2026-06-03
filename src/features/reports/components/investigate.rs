@@ -34,6 +34,22 @@ pub async fn handle(
         respond_ephemeral(ctx, ci, super::super::SELF_ACTION_REFUSAL).await;
         return Ok(());
     }
+    // Already investigated — point to the existing thread rather than make a duplicate.
+    if let Some(tid) = report.thread_id.as_deref().and_then(|s| s.parse::<u64>().ok()) {
+        respond_ephemeral(ctx, ci, &format!("This report is already being investigated: <#{tid}>")).await;
+        return Ok(());
+    }
+
+    // Creating the thread, forwarding the message, and posting the context cards far
+    // exceeds Discord's 3-second response window, so acknowledge the click first and
+    // send the confirmation as a follow-up.
+    ci.create_response(
+        &ctx.http,
+        serenity::CreateInteractionResponse::Defer(
+            serenity::CreateInteractionResponseMessage::new().ephemeral(true),
+        ),
+    )
+    .await?;
 
     let guild_cfg = data.db.get_or_create_guild(&guild_id.to_string()).await?;
     let reports_ch = guild_cfg
@@ -80,13 +96,11 @@ pub async fn handle(
     )
     .await;
 
-    ci.create_response(
+    ci.create_followup(
         &ctx.http,
-        serenity::CreateInteractionResponse::Message(
-            serenity::CreateInteractionResponseMessage::new()
-                .ephemeral(true)
-                .content(format!("Investigation thread created: <#{}>", thread.id)),
-        ),
+        serenity::CreateInteractionResponseFollowup::new()
+            .ephemeral(true)
+            .content(format!("Investigation thread created: <#{}>", thread.id)),
     )
     .await?;
     Ok(())

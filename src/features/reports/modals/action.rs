@@ -43,6 +43,16 @@ pub async fn handle(
     }
     let reporter_id = report.reporter_id.clone();
 
+    // Applying the action, DMing the target, archiving the thread, and notifying the
+    // reporter exceeds the 3-second window — acknowledge first, confirm via follow-up.
+    mi.create_response(
+        &ctx.http,
+        serenity::CreateInteractionResponse::Defer(
+            serenity::CreateInteractionResponseMessage::new().ephemeral(true),
+        ),
+    )
+    .await?;
+
     match action.as_str() {
         "warn" => {
             let target = serenity::UserId::new(target_id).to_user(ctx).await?;
@@ -212,15 +222,14 @@ pub async fn handle(
         .ok();
     super::super::view::notify_reporter_action_taken(ctx, &reporter_id).await;
 
-    mi.create_response(
+    mi.create_followup(
         &ctx.http,
-        serenity::CreateInteractionResponse::Message(
-            serenity::CreateInteractionResponseMessage::new()
-                .ephemeral(true)
-                .content("Action taken. Report resolved and thread archived."),
-        ),
+        serenity::CreateInteractionResponseFollowup::new()
+            .ephemeral(true)
+            .content("Action taken. Report resolved and thread archived."),
     )
-    .await?;
+    .await
+    .ok();
     Ok(())
 }
 

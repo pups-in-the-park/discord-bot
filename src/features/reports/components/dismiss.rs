@@ -37,6 +37,16 @@ pub async fn handle(
         return Ok(());
     }
 
+    // Editing the card, archiving the thread, and DMing the reporter can exceed the
+    // 3-second response window — acknowledge first, confirm via follow-up.
+    ci.create_response(
+        &ctx.http,
+        serenity::CreateInteractionResponse::Defer(
+            serenity::CreateInteractionResponseMessage::new().ephemeral(true),
+        ),
+    )
+    .await?;
+
     data.db
         .resolve_report(report_id, "no_action", &ci.user.id.to_string())
         .await?;
@@ -69,6 +79,13 @@ pub async fn handle(
 
     super::super::view::notify_reporter_no_action(ctx, &report).await;
 
-    respond_ephemeral(ctx, ci, "Report dismissed. Reporter has been notified.").await;
+    ci.create_followup(
+        &ctx.http,
+        serenity::CreateInteractionResponseFollowup::new()
+            .ephemeral(true)
+            .content("Report dismissed. Reporter has been notified."),
+    )
+    .await
+    .ok();
     Ok(())
 }
