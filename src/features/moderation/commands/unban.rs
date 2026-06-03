@@ -1,6 +1,7 @@
 use poise::serenity_prelude as serenity;
 
 use crate::context::{colours, Context, Error};
+use crate::features::moderation::service::{send_action_dm, ModActionDm};
 
 /// Unban a user.
 #[poise::command(slash_command, guild_only, default_member_permissions = "BAN_MEMBERS")]
@@ -34,6 +35,12 @@ pub async fn unban(
             None,
         )
         .await?;
+
+    // Best-effort courtesy DM (the user shares no guild with us once unbanned, so
+    // this may not deliver).
+    if let Ok(user) = uid.to_user(&ctx.serenity_context().http).await {
+        send_action_dm(&ctx.serenity_context().http, &user, guild_id, ModActionDm::Unban, None).await;
+    }
 
     ctx.send(
         poise::CreateReply::default().ephemeral(true).embed(

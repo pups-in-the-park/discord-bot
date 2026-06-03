@@ -1,7 +1,10 @@
 use poise::serenity_prelude as serenity;
 
 use crate::context::{colours, Context, Error};
-use crate::features::moderation::{service::send_action_dm, view::log_action};
+use crate::features::moderation::{
+    service::{send_action_dm, ModActionDm},
+    view::log_action,
+};
 use crate::permissions::validate_target;
 
 /// Issue a warning to a user.
@@ -36,8 +39,7 @@ pub async fn warn(
             &ctx.serenity_context().http,
             &user,
             guild_id,
-            "⚠️ Warning",
-            &reason,
+            ModActionDm::Warn { reason: &reason },
             Some((infraction.id, guild_id)),
         )
         .await;
@@ -47,7 +49,8 @@ pub async fn warn(
         ctx.serenity_context(),
         &ctx.data(),
         guild_id,
-        "⚠️ Member Warned",
+        "warn",
+        Some(infraction.id),
         &user,
         ctx.author(),
         &reason,

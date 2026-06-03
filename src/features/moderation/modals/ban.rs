@@ -3,7 +3,7 @@ use std::sync::Arc;
 use poise::serenity_prelude as serenity;
 
 use crate::context::BotData;
-use crate::features::moderation::service::send_action_dm;
+use crate::features::moderation::service::{send_action_dm, ModActionDm};
 use crate::ids::parse_mod_ban_modal;
 use crate::util::modal_field;
 
@@ -53,7 +53,8 @@ pub async fn handle(
     let mod_cfg = data.db.get_or_create_mod_config(&guild_id.to_string()).await?;
     if mod_cfg.dm_on_ban {
         let appeal_info = if appealable { Some((infraction.id, guild_id)) } else { None };
-        send_action_dm(&ctx.http, &target, guild_id, "🔨 Banned", &reason, appeal_info).await;
+        send_action_dm(&ctx.http, &target, guild_id, ModActionDm::Ban { reason: &reason }, appeal_info)
+            .await;
     }
 
     mi.create_response(

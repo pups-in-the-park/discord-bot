@@ -6,13 +6,29 @@ use poise::serenity_prelude as serenity;
 
 use crate::context::{colours, BotData};
 
-/// Post a moderation-action embed to the mod-log channel, if one is configured.
+/// Emoji, title, and accent colour for a moderation action kind.
+fn action_style(kind: &str) -> (&'static str, &'static str, serenity::Colour) {
+    match kind {
+        "ban" => ("🔨", "Member Banned", colours::RED),
+        "kick" => ("👢", "Member Kicked", colours::ORANGE),
+        "warn" => ("⚠️", "Member Warned", colours::YELLOW),
+        "timeout" => ("⏱️", "Member Timed Out", colours::YELLOW),
+        "untimeout" => ("⏱️", "Timeout Removed", colours::GREEN),
+        "unban" => ("🔓", "Member Unbanned", colours::GREEN),
+        _ => ("•", "Moderation Action", colours::ORANGE),
+    }
+}
+
+/// Post a structured moderation-action embed to the mod-log channel, if configured.
+/// `kind` drives the title + per-action colour; `case_id` is the infraction id;
+/// `extra` carries action-specific detail (duration/expiry, appealable, jump link).
 #[allow(clippy::too_many_arguments)]
 pub async fn log_action(
     ctx: &serenity::Context,
     data: &Arc<BotData>,
     guild_id: serenity::GuildId,
-    title: &str,
+    kind: &str,
+    case_id: Option<i64>,
     target: &serenity::User,
     moderator: &serenity::User,
     reason: &str,
@@ -22,17 +38,30 @@ pub async fn log_action(
         return;
     };
 
+    let (emoji, label, colour) = action_style(kind);
+    let title = match case_id {
+        Some(id) => format!("{emoji} {label} · Case #{id}"),
+        None => format!("{emoji} {label}"),
+    };
+
     let mut embed = serenity::CreateEmbed::new()
-        .colour(colours::ORANGE)
+        .colour(colour)
         .title(title)
-        .field("User", format!("<@{}> ({})", target.id, target.name), true)
-        .field("Moderator", format!("<@{}>", moderator.id), true)
-        .field("Reason", reason, false)
-        .timestamp(serenity::Timestamp::now());
+        .thumbnail(target.face())
+        .field(
+            "User",
+            format!("<@{}> · {} · `{}`", target.id, target.name, target.id),
+            false,
+        )
+        .field("Moderator", format!("<@{}>", moderator.id), true);
 
     if let Some(e) = extra {
         embed = embed.field("Info", e, true);
     }
+
+    embed = embed
+        .field("Reason", reason, false)
+        .timestamp(serenity::Timestamp::now());
 
     ch.widen()
         .send_message(&ctx.http, serenity::CreateMessage::new().embed(embed))
