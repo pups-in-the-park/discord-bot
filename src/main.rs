@@ -172,6 +172,12 @@ async fn auto_close_task(http: Arc<serenity::Http>, data: Arc<BotData>) {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // 0. Install a rustls CryptoProvider. serenity-next and sqlx pull in multiple
+    //    rustls backends, so rustls can't pick one automatically.
+    rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .map_err(|_| anyhow::anyhow!("Failed to install rustls crypto provider"))?;
+
     // 1. Load config.toml
     let config = AppConfig::load()?;
 
