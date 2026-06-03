@@ -17,6 +17,9 @@ pub enum ModActionDm<'a> {
     Ban { reason: &'a str },
     Untimeout,
     Unban,
+    /// Blocked from a feature (tickets/reports/concerns/appeals). `expires_ts` is a
+    /// unix timestamp, or `None` for a permanent block.
+    Blocklist { reason: &'a str, feature: &'a str, expires_ts: Option<i64> },
 }
 
 impl ModActionDm<'_> {
@@ -24,7 +27,7 @@ impl ModActionDm<'_> {
     fn accent(&self) -> u32 {
         match self {
             ModActionDm::Warn { .. } | ModActionDm::Timeout { .. } => colours::YELLOW.0,
-            ModActionDm::Kick { .. } => colours::ORANGE.0,
+            ModActionDm::Kick { .. } | ModActionDm::Blocklist { .. } => colours::ORANGE.0,
             ModActionDm::Ban { .. } => colours::RED.0,
             ModActionDm::Untimeout | ModActionDm::Unban => colours::GREEN.0,
         }
@@ -69,6 +72,17 @@ impl ModActionDm<'_> {
             ModActionDm::Unban => format!(
                 "✅ **Your ban from {guild} has been lifted.** You're welcome to rejoin with a valid invite."
             ),
+            ModActionDm::Blocklist { reason, feature, expires_ts } => {
+                let expiry = match expires_ts {
+                    Some(ts) => format!("\nThis block lifts <t:{ts}:R>."),
+                    None => "\nThis block does not expire.".to_string(),
+                };
+                format!(
+                    "🚫 **You've been blocked from {feature} in {guild}.**{}{}",
+                    reason_line(reason),
+                    expiry
+                )
+            }
         }
     }
 }

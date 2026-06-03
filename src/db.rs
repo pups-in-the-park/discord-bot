@@ -1148,11 +1148,14 @@ impl Database {
         scope: &str,
         reason: &str,
         added_by: &str,
+        expires_at: Option<&str>,
     ) -> Result<bool> {
+        // REPLACE so re-blocking the same scope updates the reason/expiry.
         let res = sqlx::query(
-            "INSERT OR IGNORE INTO blocklist (guild_id,user_id,scope,reason,added_by) VALUES (?,?,?,?,?)",
+            "INSERT OR REPLACE INTO blocklist (guild_id,user_id,scope,reason,added_by,expires_at)
+             VALUES (?,?,?,?,?,?)",
         )
-        .bind(guild_id).bind(user_id).bind(scope).bind(reason).bind(added_by)
+        .bind(guild_id).bind(user_id).bind(scope).bind(reason).bind(added_by).bind(expires_at)
         .execute(&self.pool).await?;
         Ok(res.rows_affected() > 0)
     }
@@ -1165,13 +1168,28 @@ impl Database {
         Ok(res.rows_affected() > 0)
     }
 
-    pub async fn is_blocklisted(&self, guild_id: &str, user_id: &str, scope: &str) -> Result<bool> {
-        let n: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM blocklist WHERE guild_id=? AND user_id=? AND (scope='global' OR scope=?)",
+    /// The active (non-expired) blocklist entry covering `scope`, if any. A
+    /// `ticket:{name}` scope is also covered by the `tickets` umbrella entry.
+    pub async fn get_active_block(
+        &self,
+        guild_id: &str,
+        user_id: &str,
+        scope: &str,
+    ) -> Result<Option<BlocklistEntry>> {
+        let umbrella = if scope.starts_with("ticket:") { "tickets" } else { scope };
+        let row = sqlx::query(
+            "SELECT guild_id,user_id,scope,reason,added_by,added_at,expires_at FROM blocklist
+             WHERE guild_id=? AND user_id=? AND (scope=? OR scope=?)
+               AND (expires_at IS NULL OR expires_at > datetime('now'))
+             ORDER BY (expires_at IS NULL) DESC, added_at DESC LIMIT 1",
         )
-        .bind(guild_id).bind(user_id).bind(scope)
-        .fetch_one(&self.pool).await?;
-        Ok(n > 0)
+        .bind(guild_id).bind(user_id).bind(scope).bind(umbrella)
+        .fetch_optional(&self.pool).await?;
+        Ok(row.as_ref().map(Self::map_blocklist))
+    }
+
+    pub async fn is_blocklisted(&self, guild_id: &str, user_id: &str, scope: &str) -> Result<bool> {
+        Ok(self.get_active_block(guild_id, user_id, scope).await?.is_some())
     }
 
     pub async fn get_blocklist(&self, guild_id: &str) -> Result<Vec<BlocklistEntry>> {

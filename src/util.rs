@@ -82,6 +82,30 @@ pub fn sanitise_name(s: &str) -> String {
         .to_string()
 }
 
+/// Parse a human duration like `30s`, `15m`, `2h`, `7d`, `1w` (bare number = seconds)
+/// into seconds. Returns `None` for empty/invalid input.
+pub fn parse_duration_secs(s: &str) -> Option<i64> {
+    let s = s.trim().to_lowercase();
+    if s.is_empty() {
+        return None;
+    }
+    let split = s.find(|c: char| c.is_alphabetic()).unwrap_or(s.len());
+    let (num, unit) = s.split_at(split);
+    let n: i64 = num.trim().parse().ok()?;
+    if n < 0 {
+        return None;
+    }
+    let mult = match unit.trim() {
+        "" | "s" | "sec" | "secs" | "second" | "seconds" => 1,
+        "m" | "min" | "mins" | "minute" | "minutes" => 60,
+        "h" | "hr" | "hrs" | "hour" | "hours" => 3600,
+        "d" | "day" | "days" => 86400,
+        "w" | "wk" | "week" | "weeks" => 604800,
+        _ => return None,
+    };
+    n.checked_mul(mult)
+}
+
 /// Format a duration in seconds into a human-readable string.
 pub fn format_duration(secs: i64) -> String {
     if secs < 60 {

@@ -19,25 +19,32 @@ pub async fn blocklist(_ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-/// Suggest "global" plus the guild's category names.
+/// Suggest the feature scopes plus a `ticket:{name}` entry per category.
 pub(crate) async fn autocomplete_scope<'a>(
     ctx: Context<'a>,
     partial: &'a str,
 ) -> serenity::CreateAutocompleteResponse<'a> {
-    let Some(guild_id) = ctx.guild_id() else {
-        return serenity::CreateAutocompleteResponse::new();
-    };
-    let partial_lower = partial.to_lowercase();
+    let p = partial.to_lowercase();
 
-    let mut choices = vec![serenity::AutocompleteChoice::new("global", "global")];
+    let mut choices: Vec<serenity::AutocompleteChoice> = super::view::FEATURE_SCOPES
+        .iter()
+        .filter(|s| s.contains(&p))
+        .map(|s| serenity::AutocompleteChoice::new(*s, *s))
+        .collect();
 
-    if let Ok(types) = ctx.data().db.get_ticket_types(&guild_id.to_string()).await {
-        for t in types {
-            if partial_lower.is_empty()
-                || t.name.to_lowercase().contains(&partial_lower)
-                || t.label.to_lowercase().contains(&partial_lower)
-            {
-                choices.push(serenity::AutocompleteChoice::new(t.label, t.name));
+    if let Some(guild_id) = ctx.guild_id() {
+        if let Ok(types) = ctx.data().db.get_ticket_types(&guild_id.to_string()).await {
+            for t in types {
+                let value = format!("ticket:{}", t.name);
+                if p.is_empty()
+                    || value.to_lowercase().contains(&p)
+                    || t.label.to_lowercase().contains(&p)
+                {
+                    choices.push(serenity::AutocompleteChoice::new(
+                        format!("{} (category)", t.label),
+                        value,
+                    ));
+                }
             }
         }
     }

@@ -46,6 +46,11 @@ pub async fn handle(
     let gid = guild_id.to_string();
     let reporter_id = mi.user.id.to_string();
 
+    if let Some(block) = data.db.get_active_block(&gid, &reporter_id, "reports").await? {
+        ephemeral_reply(ctx, mi, &crate::features::blocklist::view::blocked_text(&block)).await?;
+        return Ok(());
+    }
+
     // A report is only actionable if there's a reports channel to surface its card.
     let guild_cfg = data.db.get_or_create_guild(&gid).await?;
     let Some(reports_ch) =

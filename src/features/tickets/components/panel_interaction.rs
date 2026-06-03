@@ -35,13 +35,17 @@ pub async fn handle(
         .await?
         .ok_or_else(|| anyhow::anyhow!("Ticket type not found"))?;
 
-    // Check blocklist
-    if data
+    // Check blocklist (category-specific, also covered by the `tickets` umbrella).
+    if let Some(block) = data
         .db
-        .is_blocklisted(&guild_id.to_string(), &ci.user.id.to_string(), &ticket_type.name)
+        .get_active_block(
+            &guild_id.to_string(),
+            &ci.user.id.to_string(),
+            &format!("ticket:{}", ticket_type.name),
+        )
         .await?
     {
-        respond_ephemeral(ctx, ci, "You are not allowed to open this type of ticket.").await;
+        respond_ephemeral(ctx, ci, &crate::features::blocklist::view::blocked_text(&block)).await;
         return Ok(());
     }
 

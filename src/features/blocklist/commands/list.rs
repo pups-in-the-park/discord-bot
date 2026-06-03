@@ -25,7 +25,13 @@ pub async fn list(ctx: Context<'_>) -> Result<(), Error> {
     let lines: Vec<String> = entries
         .iter()
         .take(20)
-        .map(|e| format!("<@{}> · scope: `{}` · {}", e.user_id, e.scope, e.reason))
+        .map(|e| {
+            let expiry = match e.expires_at.as_deref().and_then(crate::features::blocklist::view::sqlite_ts) {
+                Some(ts) => format!("lifts <t:{ts}:R>"),
+                None => "permanent".to_string(),
+            };
+            format!("<@{}> · `{}` · {} · {}", e.user_id, e.scope, expiry, e.reason)
+        })
         .collect();
 
     ctx.send(

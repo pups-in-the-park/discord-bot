@@ -21,6 +21,27 @@ pub async fn handle(
         .unwrap_or("")
         .to_string();
 
+    // Blocklist check — but a `concerns` block never bars raising a concern about a
+    // denied appeal (kind == "appeal"); that escape hatch always stays open.
+    if kind != "appeal" {
+        if let Some(block) = data
+            .db
+            .get_active_block(&guild_id.to_string(), &mi.user.id.to_string(), "concerns")
+            .await?
+        {
+            mi.create_response(
+                &ctx.http,
+                serenity::CreateInteractionResponse::Message(
+                    serenity::CreateInteractionResponseMessage::new()
+                        .ephemeral(true)
+                        .content(crate::features::blocklist::view::blocked_text(&block)),
+                ),
+            )
+            .await?;
+            return Ok(());
+        }
+    }
+
     // Attribute the concern to the moderator whose decision it challenges, so the
     // accountability stats can answer "who is getting more concerns?".
     let target_moderator_id = match kind.as_str() {

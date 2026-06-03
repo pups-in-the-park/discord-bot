@@ -43,6 +43,10 @@ pub async fn submit_user_report(
     let reporter_id = ctx.author().id.to_string();
     let target_id = target.id.to_string();
 
+    if let Some(block) = ctx.data().db.get_active_block(&gid, &reporter_id, "reports").await? {
+        return Err(Error::user(crate::features::blocklist::view::blocked_text(&block)));
+    }
+
     // A report is only actionable if there's a reports channel to surface its card.
     let guild_cfg = ctx.data().db.get_or_create_guild(&gid).await?;
     let Some(reports_ch) =
