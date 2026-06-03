@@ -2,7 +2,9 @@
 
 ## Overview
 
-**pip** is a single-guild Discord moderation bot written in Rust. It uses [Serenity](https://github.com/serenity-rs/serenity) as the Discord API client and [Poise](https://github.com/serenity-rs/poise) as the slash-command framework. Persistence is SQLite via [sqlx](https://github.com/launchbadra/sqlx). All component and modal routing is custom — Poise only dispatches slash commands.
+**pip** is a single-guild Discord moderation bot written in Rust. It uses [Serenity](https://github.com/serenity-rs/serenity) (the `next` branch) as the Discord API client and [Poise](https://github.com/serenity-rs/poise) (`serenity-next` branch) as the slash-command framework — pinned as git dependencies, requires rustc ≥ 1.95. This stack supports **components v2**, including selects and checkbox groups inside modals. Persistence is SQLite via [sqlx](https://github.com/launchbadr/sqlx) with versioned migrations under `migrations/`. Slash commands are dispatched by poise; component and modal routing is custom (see each feature's `router.rs`).
+
+> **Building UI?** See [ui-conventions.md](ui-conventions.md) for when to use cards vs modals vs ephemeral forms, the modal-v2 helpers, custom-id rules, and colour semantics.
 
 ---
 
