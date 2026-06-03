@@ -48,7 +48,7 @@ pub async fn is_mod_staff(
 
 /// Validates that a moderation target is not a bot and not the invoker.
 pub async fn validate_target(ctx: &Context<'_>, user: &serenity::User) -> Result<(), BotError> {
-    if user.bot {
+    if user.bot() {
         return Err(BotError::user("You cannot moderate bots."));
     }
     if user.id == ctx.author().id {
@@ -62,7 +62,7 @@ pub async fn require_mod_staff(ctx: &Context<'_>) -> Result<(), BotError> {
     let Some(guild_id) = ctx.guild_id() else {
         return Err(BotError::user("This command must be used in a server."));
     };
-    if !is_mod_staff(ctx.serenity_context(), ctx.data(), guild_id, ctx.author().id).await {
+    if !is_mod_staff(ctx.serenity_context(), &ctx.data(), guild_id, ctx.author().id).await {
         return Err(BotError::user("You don't have permission to use this command."));
     }
     Ok(())

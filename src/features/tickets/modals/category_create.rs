@@ -22,7 +22,7 @@ pub async fn handle(
 
     if name.is_empty() || label.is_empty() {
         mi.create_response(
-            ctx,
+            &ctx.http,
             serenity::CreateInteractionResponse::Message(
                 serenity::CreateInteractionResponseMessage::new()
                     .ephemeral(true)
@@ -46,7 +46,7 @@ pub async fn handle(
         .await?;
 
     mi.create_response(
-        ctx,
+        &ctx.http,
         serenity::CreateInteractionResponse::Message(
             serenity::CreateInteractionResponseMessage::new()
                 .ephemeral(true)

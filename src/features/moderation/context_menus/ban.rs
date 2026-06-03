@@ -13,34 +13,29 @@ pub async fn ban_user(ctx: Context<'_>, target: serenity::User) -> Result<(), Er
         ctx,
         serenity::CreateModal::new(cid_mod_ban_modal(target.id.get()), "🔨 Ban User").components(
             vec![
-                serenity::CreateActionRow::InputText(
-                    serenity::CreateInputText::new(
-                        serenity::InputTextStyle::Short,
-                        "Reason for ban",
-                        "reason",
-                    )
-                    .required(true)
-                    .placeholder("Be specific about the violation"),
+                crate::util::modal_input(
+                    "Reason for ban",
+                    "reason",
+                    false,
+                    true,
+                    Some("Be specific about the violation"),
+                    None,
                 ),
-                serenity::CreateActionRow::InputText(
-                    serenity::CreateInputText::new(
-                        serenity::InputTextStyle::Short,
-                        "Delete their messages",
-                        "delete_messages",
-                    )
-                    .required(false)
-                    .placeholder("none / 1h / 6h / 24h / 3d / 7d")
-                    .value("none"),
+                crate::util::modal_input(
+                    "Delete their messages",
+                    "delete_messages",
+                    false,
+                    false,
+                    Some("none / 1h / 6h / 24h / 3d / 7d"),
+                    Some("none"),
                 ),
-                serenity::CreateActionRow::InputText(
-                    serenity::CreateInputText::new(
-                        serenity::InputTextStyle::Short,
-                        "Allow appeals (yes/no)",
-                        "appealable",
-                    )
-                    .required(false)
-                    .placeholder("Can they appeal this ban later?")
-                    .value("yes"),
+                crate::util::modal_input(
+                    "Allow appeals (yes/no)",
+                    "appealable",
+                    false,
+                    false,
+                    Some("Can they appeal this ban later?"),
+                    Some("yes"),
                 ),
             ],
         ),

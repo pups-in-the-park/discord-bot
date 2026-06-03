@@ -13,24 +13,21 @@ pub async fn timeout_user(ctx: Context<'_>, target: serenity::User) -> Result<()
         ctx,
         serenity::CreateModal::new(cid_mod_timeout_modal(target.id.get()), "⏱️ Timeout User")
             .components(vec![
-                serenity::CreateActionRow::InputText(
-                    serenity::CreateInputText::new(
-                        serenity::InputTextStyle::Short,
-                        "Reason for timeout",
-                        "reason",
-                    )
-                    .required(true)
-                    .placeholder("What did they do?"),
+                crate::util::modal_input(
+                    "Reason for timeout",
+                    "reason",
+                    false,
+                    true,
+                    Some("What did they do?"),
+                    None,
                 ),
-                serenity::CreateActionRow::InputText(
-                    serenity::CreateInputText::new(
-                        serenity::InputTextStyle::Short,
-                        "How long to mute",
-                        "duration",
-                    )
-                    .required(true)
-                    .placeholder("60s / 5min / 10min / 1h / 1d / 1w")
-                    .value("1h"),
+                crate::util::modal_input(
+                    "How long to mute",
+                    "duration",
+                    false,
+                    true,
+                    Some("60s / 5min / 10min / 1h / 1d / 1w"),
+                    Some("1h"),
                 ),
             ]),
     )

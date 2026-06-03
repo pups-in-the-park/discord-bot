@@ -12,8 +12,12 @@ members = ["macros"]
 
 [dependencies]
 pip-macros = { path = "macros" }
-poise = "0.6"
-serenity = { version = "0.12", features = ["cache", "gateway", "model", "http"] }
+# serenity `next` + poise `serenity-next`: the branches that deserialize modal
+# components v2 (Label-wrapped inputs and selects-in-modals, inbound + outbound).
+# Both reference serenity by `branch = "next"`, so Cargo unifies them on one commit;
+# Cargo.lock pins the exact revs for reproducible builds.
+poise = { git = "https://github.com/serenity-rs/poise", branch = "serenity-next" }
+serenity = { git = "https://github.com/serenity-rs/serenity", branch = "next", features = ["cache", "gateway", "model", "http"] }
 tokio = { version = "1", features = ["full"] }
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "macros"] }
 serde = { version = "1", features = ["derive"] }

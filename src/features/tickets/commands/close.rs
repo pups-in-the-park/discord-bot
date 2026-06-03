@@ -26,7 +26,7 @@ pub async fn close(
     }
 
     let is_staff =
-        crate::permissions::is_mod_staff(ctx.serenity_context(), ctx.data(), guild_id, ctx.author().id).await;
+        crate::permissions::is_mod_staff(ctx.serenity_context(), &ctx.data(), guild_id, ctx.author().id).await;
 
     let is_owner = ticket.owner_id == ctx.author().id.to_string();
     if !is_staff && !is_owner {
@@ -34,20 +34,19 @@ pub async fn close(
     }
 
     if let Some(reason) = reason {
-        execute_close(&ctx.serenity_context().http, ctx.data(), &ticket, ctx.author().id, Some(&reason)).await?;
+        execute_close(&ctx.serenity_context().http, &ctx.data(), &ticket, ctx.author().id, Some(&reason)).await?;
     } else {
         // Open close-reason modal
         crate::util::modal_response(
             ctx,
             serenity::CreateModal::new(cid_close_modal(ticket.id), "🔒 Close Ticket").components(vec![
-                serenity::CreateActionRow::InputText(
-                    serenity::CreateInputText::new(
-                        serenity::InputTextStyle::Paragraph,
-                        "Why are you closing this?",
-                        CLOSE_REASON_FIELD,
-                    )
-                    .required(false)
-                    .placeholder("e.g. Issue resolved, user no longer responsive"),
+                crate::util::modal_input(
+                    "Why are you closing this?",
+                    CLOSE_REASON_FIELD,
+                    true,
+                    false,
+                    Some("e.g. Issue resolved, user no longer responsive"),
+                    None,
                 ),
             ]),
         )

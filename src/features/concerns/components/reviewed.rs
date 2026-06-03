@@ -16,8 +16,14 @@ pub async fn handle(
         .await?;
 
     // Acknowledge first, then edit the original message via the HTTP API.
-    ci.create_response(ctx, serenity::CreateInteractionResponse::Acknowledge)
+    ci.create_response(&ctx.http, serenity::CreateInteractionResponse::Acknowledge)
         .await?;
-    super::super::view::mark_concern_reviewed(ctx, ci.channel_id, ci.message.id, ci.user.id).await;
+    super::super::view::mark_concern_reviewed(
+        ctx,
+        serenity::ChannelId::new(ci.channel_id.get()),
+        ci.message.id,
+        ci.user.id,
+    )
+    .await;
     Ok(())
 }

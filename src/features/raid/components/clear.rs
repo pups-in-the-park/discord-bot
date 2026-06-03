@@ -23,7 +23,7 @@ pub async fn handle(
     crate::events::clear_raid_mode(ctx, data, guild_id).await;
 
     ci.create_response(
-        ctx,
+        &ctx.http,
         serenity::CreateInteractionResponse::Message(
             serenity::CreateInteractionResponseMessage::new()
                 .content(format!("✅ Raid mode cleared by <@{}>.", ci.user.id)),

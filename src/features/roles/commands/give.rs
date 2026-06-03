@@ -15,7 +15,7 @@ pub async fn give(
         .member(&ctx, user.id)
         .await
         .map_err(|_| Error::user("User is not in this server."))?
-        .add_role(&ctx, role.id)
+        .add_role(&ctx.serenity_context().http, role.id, None)
         .await
         .map_err(|e| Error::user(format!("Failed to add role: {}", e)))?;
 

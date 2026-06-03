@@ -33,8 +33,9 @@ impl Modal {
         self.component(Label::new(label, component))
     }
 
-    /// Append a legacy Action-Row-wrapped text input (the serenity-readable form,
-    /// with the label inline on the input). `value` pre-fills the field.
+    /// Append a `Label`-wrapped text input (modal-components-v2 form). serenity
+    /// `next` only deserializes `Label`-wrapped modal fields, so this is the
+    /// round-trippable form. `value` pre-fills the field.
     pub fn text_row(
         self,
         custom_id: impl Into<String>,
@@ -45,11 +46,10 @@ impl Modal {
         value: Option<&str>,
     ) -> Self {
         let input = TextInput::new(custom_id, style)
-            .label(label)
             .placeholder(placeholder)
             .required(required)
             .value(value);
-        self.component(super::component::ActionRow::new(vec![input.into()]))
+        self.component(Label::new(label, input))
     }
 }
 

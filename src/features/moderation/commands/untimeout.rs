@@ -13,7 +13,11 @@ pub async fn untimeout(
     let guild_id = ctx.guild_id().unwrap();
 
     guild_id
-        .edit_member(&ctx, user.id, serenity::EditMember::new().enable_communication())
+        .edit_member(
+            &ctx.serenity_context().http,
+            user.id,
+            serenity::EditMember::new().enable_communication(),
+        )
         .await
         .map_err(|e| Error::user(format!("Failed to remove timeout: {}", e)))?;
 
@@ -33,7 +37,7 @@ pub async fn untimeout(
 
     log_action(
         ctx.serenity_context(),
-        ctx.data(),
+        &ctx.data(),
         guild_id,
         "⏱️ Timeout Removed",
         &user,

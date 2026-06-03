@@ -35,13 +35,19 @@ async fn send_log_embed(
     data: &Arc<BotData>,
     guild_id: serenity::GuildId,
     stream: LogStream,
-    embed: serenity::CreateEmbed,
+    embed: serenity::CreateEmbed<'_>,
 ) {
     let Some(channel_id) = get_log_channel_id(data, guild_id, stream).await else { return; };
     channel_id
-        .send_message(ctx, serenity::CreateMessage::new().embed(embed))
+        .widen()
+        .send_message(&ctx.http, serenity::CreateMessage::new().embed(embed))
         .await
         .ok();
+}
+
+/// Clamp a slowmode seconds value into serenity-`next`'s `NonMaxU16`.
+fn to_nonmax(secs: u16) -> serenity::nonmax::NonMaxU16 {
+    serenity::nonmax::NonMaxU16::new(secs).unwrap_or_default()
 }
 
 pub async fn handle_event(
@@ -50,7 +56,7 @@ pub async fn handle_event(
     data: &Arc<BotData>,
 ) -> Result<(), BotError> {
     match event {
-        serenity::FullEvent::Message { new_message } => {
+        serenity::FullEvent::Message { new_message, .. } => {
             handle_message(ctx, data, new_message).await;
         }
 
@@ -58,9 +64,10 @@ pub async fn handle_event(
             channel_id,
             deleted_message_id,
             guild_id: Some(gid),
+            ..
         } => {
             if let Some(log_channel) = get_log_channel_id(data, *gid, LogStream::Chat).await {
-                if *channel_id == log_channel {
+                if *channel_id == log_channel.widen() {
                     return Ok(());
                 }
             }
@@ -72,25 +79,26 @@ pub async fn handle_event(
             send_log_embed(ctx, data, *gid, LogStream::Chat, embed).await;
         }
 
-        serenity::FullEvent::MessageUpdate { old_if_available, new, event } => {
-            if let Some(gid) = event.guild_id {
+        serenity::FullEvent::MessageUpdate { old_if_available, event, .. } => {
+            let new_msg = &event.message;
+            if let Some(gid) = new_msg.guild_id {
                 if let Some(log_channel) = get_log_channel_id(data, gid, LogStream::Chat).await {
-                    if event.channel_id == log_channel { return Ok(()); }
+                    if new_msg.channel_id == log_channel.widen() { return Ok(()); }
                 }
-                let (Some(old_msg), Some(new_msg)) = (old_if_available.as_ref(), new.as_ref()) else {
+                let Some(old_msg) = old_if_available.as_ref() else {
                     return Ok(());
                 };
-                if new_msg.author.bot { return Ok(()); }
-                let old_content = old_msg.content.clone();
-                let new_content = new_msg.content.clone();
+                if new_msg.author.bot() { return Ok(()); }
+                let old_content = old_msg.content.to_string();
+                let new_content = new_msg.content.to_string();
                 if old_content.trim().is_empty() && new_content.trim().is_empty() { return Ok(()); }
                 if old_content != new_content {
                     let truncate = |s: String| if s.len() > 500 { format!("{}…", &s[..500]) } else { s };
                     let embed = serenity::CreateEmbed::new()
                         .colour(colours::YELLOW)
                         .title("✏️ Message Edited")
-                        .field("Channel", format!("<#{}>", event.channel_id), true)
-                        .field("Message ID", event.id.to_string(), true)
+                        .field("Channel", format!("<#{}>", new_msg.channel_id), true)
+                        .field("Message ID", new_msg.id.to_string(), true)
                         .field("Before", truncate(old_content), false)
                         .field("After", truncate(new_content), false)
                         .timestamp(serenity::Timestamp::now());
@@ -99,7 +107,7 @@ pub async fn handle_event(
             }
         }
 
-        serenity::FullEvent::GuildMemberAddition { new_member } => {
+        serenity::FullEvent::GuildMemberAddition { new_member, .. } => {
             handle_member_join(ctx, data, new_member).await;
         }
 
@@ -112,7 +120,7 @@ pub async fn handle_event(
             send_log_embed(ctx, data, *guild_id, LogStream::Moderation, embed).await;
         }
 
-        serenity::FullEvent::GuildBanAddition { guild_id, banned_user } => {
+        serenity::FullEvent::GuildBanAddition { guild_id, banned_user, .. } => {
             let embed = serenity::CreateEmbed::new()
                 .colour(colours::DARK_RED)
                 .title("🔨 Member Banned")
@@ -121,7 +129,7 @@ pub async fn handle_event(
             send_log_embed(ctx, data, *guild_id, LogStream::Moderation, embed).await;
         }
 
-        serenity::FullEvent::GuildBanRemoval { guild_id, unbanned_user } => {
+        serenity::FullEvent::GuildBanRemoval { guild_id, unbanned_user, .. } => {
             let embed = serenity::CreateEmbed::new()
                 .colour(colours::GREEN)
                 .title("🔓 Member Unbanned")
@@ -130,25 +138,25 @@ pub async fn handle_event(
             send_log_embed(ctx, data, *guild_id, LogStream::Moderation, embed).await;
         }
 
-        serenity::FullEvent::ChannelCreate { channel } => {
+        serenity::FullEvent::ChannelCreate { channel, .. } => {
             let embed = serenity::CreateEmbed::new()
                 .colour(colours::GREEN)
                 .title("➕ Channel Created")
-                .description(format!("{} (<#{}>)", channel.name, channel.id))
+                .description(format!("{} (<#{}>)", channel.base.name, channel.id))
                 .timestamp(serenity::Timestamp::now());
-            send_log_embed(ctx, data, channel.guild_id, LogStream::Moderation, embed).await;
+            send_log_embed(ctx, data, channel.base.guild_id, LogStream::Moderation, embed).await;
         }
 
         serenity::FullEvent::ChannelDelete { channel, .. } => {
             let embed = serenity::CreateEmbed::new()
                 .colour(colours::RED)
                 .title("➖ Channel Deleted")
-                .description(format!("{} ({})", channel.name, channel.id))
+                .description(format!("{} ({})", channel.base.name, channel.id))
                 .timestamp(serenity::Timestamp::now());
-            send_log_embed(ctx, data, channel.guild_id, LogStream::Moderation, embed).await;
+            send_log_embed(ctx, data, channel.base.guild_id, LogStream::Moderation, embed).await;
         }
 
-        serenity::FullEvent::VoiceStateUpdate { old, new } => {
+        serenity::FullEvent::VoiceStateUpdate { old, new, .. } => {
             if let Some(gid) = new.guild_id {
                 let action = match (old.as_ref().and_then(|v| v.channel_id), new.channel_id) {
                     (None, Some(to)) => format!("Joined <#{}>", to),
@@ -195,7 +203,7 @@ async fn handle_member_join(
     };
 
     let account_age_days = {
-        let created = member.user.created_at().unix_timestamp();
+        let created = member.user.id.created_at().unix_timestamp();
         let now = serenity::Timestamp::now().unix_timestamp();
         (now - created).max(0) as f64 / 86400.0
     };
@@ -257,17 +265,17 @@ pub async fn apply_raid_slowmode(
     guild_id: serenity::GuildId,
     slowmode_secs: u16,
 ) {
-    let channels = match guild_id.channels(ctx).await {
+    let channels = match guild_id.channels(&ctx.http).await {
         Ok(c) => c,
         Err(e) => { warn!("Failed to fetch channels for raid slowmode: {}", e); return; }
     };
 
-    for (_, channel) in channels {
-        if !matches!(channel.kind, serenity::ChannelType::Text | serenity::ChannelType::News) {
+    for channel in channels {
+        if !matches!(channel.base.kind, serenity::ChannelType::Text | serenity::ChannelType::News) {
             continue;
         }
         channel.id
-            .edit(ctx, serenity::EditChannel::new().rate_limit_per_user(slowmode_secs))
+            .edit(&ctx.http, serenity::EditChannel::new().rate_limit_per_user(to_nonmax(slowmode_secs)))
             .await
             .ok();
     }
@@ -283,13 +291,13 @@ pub async fn clear_raid_mode(
         error!("Failed to clear raid active flag: {}", e);
     }
     // Remove slowmode from all text channels
-    let channels = guild_id.channels(ctx).await.unwrap_or_default();
-    for (_, channel) in channels {
-        if !matches!(channel.kind, serenity::ChannelType::Text | serenity::ChannelType::News) {
+    let channels = guild_id.channels(&ctx.http).await.unwrap_or_default();
+    for channel in channels {
+        if !matches!(channel.base.kind, serenity::ChannelType::Text | serenity::ChannelType::News) {
             continue;
         }
         channel.id
-            .edit(ctx, serenity::EditChannel::new().rate_limit_per_user(0))
+            .edit(&ctx.http, serenity::EditChannel::new().rate_limit_per_user(to_nonmax(0)))
             .await
             .ok();
     }
@@ -306,37 +314,37 @@ async fn handle_message(
     // Only guild text channels
     let Some(guild_id) = msg.guild_id else { return; };
 
-    // Capture message in open ticket threads (for transcript future use)
-    let channel = match msg.channel_id.to_channel(ctx).await {
+    // Capture message in open ticket threads (for transcript future use).
+    // serenity `next` splits threads into a distinct `Channel::GuildThread`.
+    let channel = match msg.channel_id.to_channel(ctx, msg.guild_id).await {
+        Ok(serenity::Channel::GuildThread(_)) => {
+            if let Ok(Some(ticket)) = data.db.get_ticket_by_thread(&msg.channel_id.to_string()).await {
+                data.db.touch_ticket(&ticket.thread_id).await.ok();
+                let atts = if !msg.attachments.is_empty() {
+                    let urls: Vec<String> =
+                        msg.attachments.iter().map(|a| a.url.to_string()).collect();
+                    serde_json::to_string(&urls).ok()
+                } else {
+                    None
+                };
+                let sent_at = msg.timestamp.to_rfc3339();
+                data.db.save_message(
+                    ticket.id,
+                    Some(&msg.id.to_string()),
+                    &msg.author.id.to_string(),
+                    &msg.author.name,
+                    &msg.content,
+                    atts.as_deref(),
+                    &sent_at,
+                ).await.ok();
+            }
+            return;
+        }
         Ok(serenity::Channel::Guild(c)) => c,
         _ => return,
     };
 
-    if matches!(channel.kind, serenity::ChannelType::PrivateThread | serenity::ChannelType::PublicThread) {
-        if let Ok(Some(ticket)) = data.db.get_ticket_by_thread(&msg.channel_id.to_string()).await {
-            data.db.touch_ticket(&ticket.thread_id).await.ok();
-            let atts = if !msg.attachments.is_empty() {
-                let urls: Vec<String> = msg.attachments.iter().map(|a| a.url.clone()).collect();
-                serde_json::to_string(&urls).ok()
-            } else {
-                None
-            };
-            let sent_at = msg.timestamp.to_rfc3339()
-                .unwrap_or_else(|| msg.timestamp.unix_timestamp().to_string());
-            data.db.save_message(
-                ticket.id,
-                Some(&msg.id.to_string()),
-                &msg.author.id.to_string(),
-                &msg.author.name,
-                &msg.content,
-                atts.as_deref(),
-                &sent_at,
-            ).await.ok();
-        }
-        return;
-    }
-
-    if !matches!(channel.kind, serenity::ChannelType::Text | serenity::ChannelType::News) {
+    if !matches!(channel.base.kind, serenity::ChannelType::Text | serenity::ChannelType::News) {
         return;
     }
 
@@ -353,7 +361,7 @@ async fn handle_message(
 
     let target = data.raid
         .record_message(
-            msg.channel_id,
+            msg.channel_id.expect_channel(),
             slowmode_cfg.capacity as f64,
             slowmode_cfg.window_secs as f64,
         )
@@ -361,7 +369,8 @@ async fn handle_message(
 
     if let Some(secs) = target {
         msg.channel_id
-            .edit(ctx, serenity::EditChannel::new().rate_limit_per_user(secs))
+            .expect_channel()
+            .edit(&ctx.http, serenity::EditChannel::new().rate_limit_per_user(to_nonmax(secs)))
             .await
             .ok();
     }

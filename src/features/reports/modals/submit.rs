@@ -30,10 +30,10 @@ pub async fn handle(
             // Best-effort: fetch the reported message so the card can show its content.
             let content = ctx
                 .http
-                .get_message(serenity::ChannelId::new(chan_id), serenity::MessageId::new(msg_id_val))
+                .get_message(serenity::ChannelId::new(chan_id).widen(), serenity::MessageId::new(msg_id_val))
                 .await
                 .ok()
-                .map(|m| m.content)
+                .map(|m| m.content.to_string())
                 .filter(|c| !c.is_empty());
             (author_id.to_string(), Some(msg_id_val.to_string()), Some(msg_url), content)
         } else {
@@ -100,7 +100,7 @@ async fn ephemeral_reply(
     msg: &str,
 ) -> Result<(), anyhow::Error> {
     mi.create_response(
-        ctx,
+        &ctx.http,
         serenity::CreateInteractionResponse::Message(
             serenity::CreateInteractionResponseMessage::new()
                 .ephemeral(true)

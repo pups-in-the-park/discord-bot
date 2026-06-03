@@ -34,7 +34,8 @@ pub async fn log_action(
         embed = embed.field("Info", e, true);
     }
 
-    ch.send_message(ctx, serenity::CreateMessage::new().embed(embed))
+    ch.widen()
+        .send_message(&ctx.http, serenity::CreateMessage::new().embed(embed))
         .await
         .ok();
 }

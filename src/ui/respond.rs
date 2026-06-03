@@ -19,7 +19,7 @@ pub async fn send(
     components: &[Component],
 ) -> Result<serenity::Message> {
     let body = serde_json::json!({ "flags": CV2_FLAG, "components": components_json(components) });
-    Ok(http.send_message(channel_id, vec![], &body).await?)
+    Ok(http.send_message(channel_id.widen(), vec![], &body).await?)
 }
 
 /// Edit an existing message to a new CV2 component tree.
@@ -30,7 +30,7 @@ pub async fn edit(
     components: &[Component],
 ) -> Result<serenity::Message> {
     let body = serde_json::json!({ "flags": CV2_FLAG, "components": components_json(components) });
-    Ok(http.edit_message(channel_id, message_id, &body, vec![]).await?)
+    Ok(http.edit_message(channel_id.widen(), message_id, &body, vec![]).await?)
 }
 
 /// Respond to a component interaction with a new ephemeral CV2 message (type 4).

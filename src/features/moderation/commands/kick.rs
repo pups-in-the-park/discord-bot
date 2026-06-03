@@ -22,7 +22,7 @@ pub async fn kick(
     }
 
     guild_id
-        .kick_with_reason(&ctx, user.id, &reason)
+        .kick(&ctx.serenity_context().http, user.id, Some(&reason))
         .await
         .map_err(|e| Error::user(format!("Failed to kick user: {}", e)))?;
 
@@ -42,7 +42,7 @@ pub async fn kick(
 
     log_action(
         ctx.serenity_context(),
-        ctx.data(),
+        &ctx.data(),
         guild_id,
         "👢 Member Kicked",
         &user,

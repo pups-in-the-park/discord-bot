@@ -142,7 +142,7 @@ pub async fn handle(
         }
 
         _ => {
-            ci.create_response(ctx, serenity::CreateInteractionResponse::Acknowledge).await?;
+            ci.create_response(&ctx.http, serenity::CreateInteractionResponse::Acknowledge).await?;
         }
     }
 

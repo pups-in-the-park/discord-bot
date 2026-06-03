@@ -50,7 +50,7 @@ pub async fn handle(
     }
 
     mi.create_response(
-        ctx,
+        &ctx.http,
         serenity::CreateInteractionResponse::Message(
             serenity::CreateInteractionResponseMessage::new()
                 .ephemeral(true)

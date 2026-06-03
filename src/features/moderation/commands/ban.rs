@@ -24,7 +24,7 @@ pub async fn ban(
     let mod_cfg = ctx.data().db.get_or_create_mod_config(&gid).await?;
 
     guild_id
-        .ban_with_reason(&ctx, user.id, (delete_secs / 86400) as u8, &reason)
+        .ban(&ctx.serenity_context().http, user.id, delete_secs as u32, Some(&reason))
         .await
         .map_err(|e| Error::user(format!("Failed to ban user: {}", e)))?;
 
@@ -51,7 +51,7 @@ pub async fn ban(
 
     log_action(
         ctx.serenity_context(),
-        ctx.data(),
+        &ctx.data(),
         guild_id,
         "🔨 Member Banned",
         &user,

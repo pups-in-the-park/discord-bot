@@ -63,7 +63,8 @@ pub(crate) async fn resolve_appeal(ctx: Context<'_>, status: &str, response: Str
     }
 
     channel_id
-        .edit_thread(ctx, serenity::EditThread::new().archived(true))
+        .expect_thread()
+        .edit(&ctx.serenity_context().http, serenity::EditThread::new().archived(true))
         .await
         .ok();
 
@@ -73,7 +74,10 @@ pub(crate) async fn resolve_appeal(ctx: Context<'_>, status: &str, response: Str
             let uid = inf.user_id.parse::<u64>().map(serenity::UserId::new).ok();
             if inf.kind == "ban" {
                 if let Some(uid) = uid {
-                    guild_id.unban(&ctx, uid).await.ok();
+                    guild_id
+                        .unban(&ctx.serenity_context().http, uid, None)
+                        .await
+                        .ok();
                     ctx.data()
                         .db
                         .create_infraction(
@@ -144,13 +148,13 @@ pub(crate) async fn resolve_appeal(ctx: Context<'_>, status: &str, response: Str
 
 /// Create a one-use, one-week rejoin invite to the first text channel, if any.
 async fn make_rejoin_invite(ctx: &Context<'_>, guild_id: serenity::GuildId) -> Option<String> {
-    let channels = guild_id.channels(ctx).await.ok()?;
+    let channels = guild_id.channels(&ctx.serenity_context().http).await.ok()?;
     let channel = channels
-        .into_values()
-        .find(|c| c.kind == serenity::ChannelType::Text)?;
+        .into_iter()
+        .find(|c| c.base.kind == serenity::ChannelType::Text)?;
     let invite = channel
         .id
-        .create_invite(ctx, serenity::CreateInvite::new().max_uses(1).max_age(604800))
+        .create_invite(&ctx.serenity_context().http, serenity::CreateInvite::new().max_uses(1).max_age(604800))
         .await
         .ok()?;
     Some(format!("https://discord.gg/{}", invite.code))

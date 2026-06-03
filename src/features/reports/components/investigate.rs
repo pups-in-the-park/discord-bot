@@ -51,8 +51,8 @@ pub async fn handle(
 
     let thread = reports_ch
         .create_thread(
-            ctx,
-            serenity::CreateThread::new(&thread_name)
+            &ctx.http,
+            serenity::CreateThread::new(thread_name)
                 .kind(serenity::ChannelType::PrivateThread)
                 .auto_archive_duration(serenity::AutoArchiveDuration::OneWeek)
                 .invitable(false),
@@ -68,10 +68,15 @@ pub async fn handle(
         .await
         .ok();
 
-    super::super::view::post_investigation_cards(ctx, thread.id, &report).await;
+    super::super::view::post_investigation_cards(
+        ctx,
+        serenity::ChannelId::new(thread.id.get()),
+        &report,
+    )
+    .await;
 
     ci.create_response(
-        ctx,
+        &ctx.http,
         serenity::CreateInteractionResponse::Message(
             serenity::CreateInteractionResponseMessage::new()
                 .ephemeral(true)

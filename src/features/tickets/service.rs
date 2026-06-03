@@ -26,7 +26,7 @@ pub struct OpenThreadOptions<'a> {
 }
 
 pub struct OpenedThread {
-    pub thread: serenity::GuildChannel,
+    pub thread: serenity::GuildThread,
 }
 
 pub async fn open_thread(
@@ -39,8 +39,8 @@ pub async fn open_thread(
         .owner_id
         .to_user(ctx)
         .await
-        .map(|u| u.name)
-        .unwrap_or_else(|_| "user".into());
+        .map(|u| u.name.to_string())
+        .unwrap_or_else(|_| "user".to_string());
 
     let thread_name = opts
         .ticket_type
@@ -52,8 +52,8 @@ pub async fn open_thread(
     let thread = opts
         .parent_channel_id
         .create_thread(
-            ctx,
-            serenity::CreateThread::new(&thread_name)
+            &ctx.http,
+            serenity::CreateThread::new(thread_name)
                 .kind(serenity::ChannelType::PrivateThread)
                 .auto_archive_duration(serenity::AutoArchiveDuration::OneWeek)
                 .invitable(false),
@@ -97,7 +97,8 @@ pub async fn open_thread(
 
     thread
         .id
-        .send_message(ctx, serenity::CreateMessage::new().content(ping_content))
+        .widen()
+        .send_message(&ctx.http, serenity::CreateMessage::new().content(ping_content))
         .await
         .ok();
 
@@ -167,7 +168,7 @@ pub async fn open_thread(
     ])
     .accent(color.0);
 
-    ui::send(&ctx.http, thread.id, &[card.into()]).await.ok();
+    ui::send(&ctx.http, serenity::ChannelId::new(thread.id.get()), &[card.into()]).await.ok();
 
     // Auto-add staff members
     let staff_roles = data
@@ -184,14 +185,14 @@ pub async fn open_thread(
         let mut after: Option<serenity::UserId> = None;
         loop {
             let members = guild_id
-                .members(ctx, Some(1000), after)
+                .members(&ctx.http, serenity::nonmax::NonMaxU16::new(1000), after)
                 .await
                 .unwrap_or_default();
             if members.is_empty() {
                 break;
             }
             for member in &members {
-                if member.user.bot || member.user.id == opts.owner_id {
+                if member.user.bot() || member.user.id == opts.owner_id {
                     continue;
                 }
                 if member.roles.iter().any(|rid| staff_role_ids.contains(rid)) {
@@ -223,7 +224,8 @@ pub async fn open_thread(
             .accent(colours::BLURPLE.0);
             let ch = serenity::ChannelId::new(cid);
             if !mentions.is_empty() {
-                ch.send_message(ctx, serenity::CreateMessage::new().content(&mentions))
+                ch.widen()
+                    .send_message(&ctx.http, serenity::CreateMessage::new().content(&mentions))
                     .await
                     .ok();
             }
@@ -267,8 +269,8 @@ pub async fn execute_close(
 
     ui::send(http, thread_id, &[close_card.into()]).await.ok();
 
-    thread_id
-        .edit_thread(http, serenity::EditThread::new().archived(true).locked(true))
+    serenity::ThreadId::new(thread_id.get())
+        .edit(http, serenity::EditThread::new().archived(true).locked(true))
         .await
         .ok();
 
@@ -314,7 +316,7 @@ pub async fn execute_close(
 
 /// Read intake-form responses out of a submitted modal, keyed by field label.
 pub fn collect_form_responses(
-    components: &[serenity::ActionRow],
+    components: &[serenity::ModalComponent],
     fields: &[crate::db::FormField],
 ) -> serde_json::Map<String, serde_json::Value> {
     let mut map = serde_json::Map::new();

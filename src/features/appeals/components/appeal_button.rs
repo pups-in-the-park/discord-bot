@@ -57,19 +57,16 @@ pub async fn handle(
 
     let modal_id = cid_appeal_modal(infraction_id, guild_id.get());
     ci.create_response(
-        ctx,
+        &ctx.http,
         serenity::CreateInteractionResponse::Modal(
-            serenity::CreateModal::new(&modal_id, "📄 Appeal Decision").components(vec![
-                serenity::CreateActionRow::InputText(
-                    serenity::CreateInputText::new(
-                        serenity::InputTextStyle::Paragraph,
-                        "Why should we reconsider?",
-                        APPEAL_REASON_FIELD,
-                    )
-                    .required(true)
-                    .placeholder(
-                        "Explain your perspective and why you believe this action was unfair…",
-                    ),
+            serenity::CreateModal::new(modal_id, "📄 Appeal Decision").components(vec![
+                crate::util::modal_input(
+                    "Why should we reconsider?",
+                    APPEAL_REASON_FIELD,
+                    true,
+                    true,
+                    Some("Explain your perspective and why you believe this action was unfair…"),
+                    None,
                 ),
             ]),
         ),

@@ -18,17 +18,16 @@ pub async fn handle(
         .ok_or_else(|| anyhow::anyhow!("Not a ticket thread"))?;
 
     ci.create_response(
-        ctx,
+        &ctx.http,
         serenity::CreateInteractionResponse::Modal(
             serenity::CreateModal::new(cid_close_modal(ticket.id), "🔒 Close Ticket").components(
-                vec![serenity::CreateActionRow::InputText(
-                    serenity::CreateInputText::new(
-                        serenity::InputTextStyle::Paragraph,
-                        "Why are you closing this?",
-                        CLOSE_REASON_FIELD,
-                    )
-                    .placeholder("e.g. Issue resolved, user no longer responsive")
-                    .required(false),
+                vec![crate::util::modal_input(
+                    "Why are you closing this?",
+                    CLOSE_REASON_FIELD,
+                    true,
+                    false,
+                    Some("e.g. Issue resolved, user no longer responsive"),
+                    None,
                 )],
             ),
         ),

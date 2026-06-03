@@ -12,14 +12,13 @@ pub async fn kick_user(ctx: Context<'_>, target: serenity::User) -> Result<(), E
     crate::util::modal_response(
         ctx,
         serenity::CreateModal::new(cid_mod_kick_modal(target.id.get()), "👢 Kick User").components(
-            vec![serenity::CreateActionRow::InputText(
-                serenity::CreateInputText::new(
-                    serenity::InputTextStyle::Short,
-                    "Reason for kick",
-                    "reason",
-                )
-                .required(true)
-                .placeholder("This user can rejoin later"),
+            vec![crate::util::modal_input(
+                "Reason for kick",
+                "reason",
+                false,
+                true,
+                Some("This user can rejoin later"),
+                None,
             )],
         ),
     )

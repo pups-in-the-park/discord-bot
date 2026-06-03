@@ -21,7 +21,7 @@ pub async fn handle(
         .to_string();
 
     guild_id
-        .kick_with_reason(ctx, serenity::UserId::new(target_id), &reason)
+        .kick(&ctx.http, serenity::UserId::new(target_id), Some(&reason))
         .await
         .ok();
     data.db
@@ -38,7 +38,7 @@ pub async fn handle(
         .await?;
 
     mi.create_response(
-        ctx,
+        &ctx.http,
         serenity::CreateInteractionResponse::Message(
             serenity::CreateInteractionResponseMessage::new()
                 .ephemeral(true)

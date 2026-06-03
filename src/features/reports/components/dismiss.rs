@@ -57,7 +57,8 @@ pub async fn handle(
 
     if from_thread {
         ci.channel_id
-            .edit_thread(ctx, serenity::EditThread::new().archived(true))
+            .expect_thread()
+            .edit(&ctx.http, serenity::EditThread::new().archived(true))
             .await
             .ok();
     }

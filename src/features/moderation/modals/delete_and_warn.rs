@@ -23,7 +23,8 @@ pub async fn handle(
         .to_string();
 
     serenity::ChannelId::new(chan_id)
-        .delete_message(ctx, serenity::MessageId::new(msg_id))
+        .widen()
+        .delete_message(&ctx.http, serenity::MessageId::new(msg_id), None)
         .await
         .ok();
 
@@ -56,7 +57,7 @@ pub async fn handle(
     }
 
     mi.create_response(
-        ctx,
+        &ctx.http,
         serenity::CreateInteractionResponse::Message(
             serenity::CreateInteractionResponseMessage::new()
                 .ephemeral(true)

@@ -68,8 +68,8 @@ pub fn build_open_modal(
     modal_id: String,
     ticket_type: &TicketType,
     fields: &[crate::db::FormField],
-) -> serenity::CreateModal {
-    let components: Vec<serenity::CreateActionRow> = fields
+) -> serenity::CreateModal<'static> {
+    let components: Vec<serenity::CreateModalComponent<'static>> = fields
         .iter()
         .take(5)
         .map(|f| {
@@ -78,11 +78,10 @@ pub fn build_open_modal(
             } else {
                 serenity::InputTextStyle::Short
             };
-            let mut input =
-                serenity::CreateInputText::new(style, &f.label, format!("ff_{}", f.id))
-                    .required(f.required);
+            let mut input = serenity::CreateInputText::new(style, format!("ff_{}", f.id))
+                .required(f.required);
             if let Some(ref ph) = f.placeholder {
-                input = input.placeholder(ph);
+                input = input.placeholder(ph.clone());
             }
             if let Some(min) = f.min_length {
                 input = input.min_length(min as u16);
@@ -90,7 +89,10 @@ pub fn build_open_modal(
             if let Some(max) = f.max_length {
                 input = input.max_length(max as u16);
             }
-            serenity::CreateActionRow::InputText(input)
+            serenity::CreateModalComponent::Label(serenity::CreateLabel::input_text(
+                f.label.clone(),
+                input,
+            ))
         })
         .collect();
 

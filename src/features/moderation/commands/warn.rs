@@ -45,7 +45,7 @@ pub async fn warn(
 
     log_action(
         ctx.serenity_context(),
-        ctx.data(),
+        &ctx.data(),
         guild_id,
         "⚠️ Member Warned",
         &user,

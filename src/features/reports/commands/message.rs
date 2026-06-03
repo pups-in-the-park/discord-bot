@@ -24,13 +24,13 @@ pub async fn message(
     let msg = ctx
         .serenity_context()
         .http
-        .get_message(serenity::ChannelId::new(channel_id), serenity::MessageId::new(message_id))
+        .get_message(serenity::ChannelId::new(channel_id).widen(), serenity::MessageId::new(message_id))
         .await
         .map_err(|_| {
             Error::user("I couldn't find that message — check the link and that I can see the channel.")
         })?;
 
-    if msg.author.bot {
+    if msg.author.bot() {
         return Err(Error::user("You can't report a bot's message."));
     }
     if msg.author.id == ctx.author().id {
@@ -41,15 +41,14 @@ pub async fn message(
     let modal_id = cid_report_msg_modal(message_id, channel_id, msg.author.id.get());
     crate::util::modal_response(
         ctx,
-        serenity::CreateModal::new(&modal_id, "🚨 Report Message").components(vec![
-            serenity::CreateActionRow::InputText(
-                serenity::CreateInputText::new(
-                    serenity::InputTextStyle::Paragraph,
-                    "Why are you reporting this?",
-                    REPORT_REASON_FIELD,
-                )
-                .required(false)
-                .placeholder("Be specific about what violates the rules…"),
+        serenity::CreateModal::new(modal_id, "🚨 Report Message").components(vec![
+            crate::util::modal_input(
+                "Why are you reporting this?",
+                REPORT_REASON_FIELD,
+                true,
+                false,
+                Some("Be specific about what violates the rules…"),
+                None,
             ),
         ]),
     )

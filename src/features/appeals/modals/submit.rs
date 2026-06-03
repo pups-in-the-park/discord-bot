@@ -22,7 +22,7 @@ pub async fn handle(
         .to_string();
     if reason.is_empty() {
         mi.create_response(
-            ctx,
+            &ctx.http,
             serenity::CreateInteractionResponse::Message(
                 serenity::CreateInteractionResponseMessage::new()
                     .ephemeral(true)
@@ -51,8 +51,8 @@ pub async fn handle(
         let thread_name = format!("appeal-{:04}-user", appeal.id);
         let thread = appeals_ch
             .create_thread(
-                ctx,
-                serenity::CreateThread::new(&thread_name)
+                &ctx.http,
+                serenity::CreateThread::new(thread_name)
                     .kind(serenity::ChannelType::PrivateThread)
                     .auto_archive_duration(serenity::AutoArchiveDuration::OneWeek)
                     .invitable(false),
@@ -75,7 +75,7 @@ pub async fn handle(
 
         super::super::view::post_appeal_thread_intro(
             ctx,
-            thread.id,
+            serenity::ChannelId::new(thread.id.get()),
             &appeal,
             &infraction,
             mi.user.id,
@@ -85,7 +85,7 @@ pub async fn handle(
     }
 
     mi.create_response(
-        ctx,
+        &ctx.http,
         serenity::CreateInteractionResponse::Message(
             serenity::CreateInteractionResponseMessage::new().ephemeral(true).content(format!(
                 "Your appeal has been submitted and will be reviewed. Reference: `#appeal-{}`.",

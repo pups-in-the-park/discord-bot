@@ -10,7 +10,7 @@ pub async fn user(
     #[description = "User to report"] target: serenity::User,
     #[description = "Reason (optional — a modal will open if omitted)"] reason: Option<String>,
 ) -> Result<(), Error> {
-    if target.bot {
+    if target.bot() {
         return Err(Error::user("You can't report a bot."));
     }
     if target.id == ctx.author().id {
@@ -24,15 +24,14 @@ pub async fn user(
     let modal_id = cid_report_user_modal(target.id.get());
     crate::util::modal_response(
         ctx,
-        serenity::CreateModal::new(&modal_id, format!("Report {}", target.name)).components(vec![
-            serenity::CreateActionRow::InputText(
-                serenity::CreateInputText::new(
-                    serenity::InputTextStyle::Paragraph,
-                    "Reason",
-                    REPORT_REASON_FIELD,
-                )
-                .required(false)
-                .placeholder("Describe your concern…"),
+        serenity::CreateModal::new(modal_id, format!("Report {}", target.name)).components(vec![
+            crate::util::modal_input(
+                "Reason",
+                REPORT_REASON_FIELD,
+                true,
+                false,
+                Some("Describe your concern…"),
+                None,
             ),
         ]),
     )
@@ -84,7 +83,7 @@ pub async fn submit_user_report(
 
     super::super::view::post_report_card(
         ctx.serenity_context(),
-        ctx.data(),
+        &ctx.data(),
         serenity::ChannelId::new(reports_ch),
         &report,
         &target,

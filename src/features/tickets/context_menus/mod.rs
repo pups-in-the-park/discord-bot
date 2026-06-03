@@ -48,12 +48,16 @@ pub(crate) async fn open_ticket_for_user(
             poise::CreateReply::default()
                 .ephemeral(true)
                 .content(format!("Open a ticket for <@{}>. Select a category:", target_id))
-                .components(vec![serenity::CreateActionRow::SelectMenu(
-                    serenity::CreateSelectMenu::new(
-                        cid_ctx_type_select(target_id.get()),
-                        serenity::CreateSelectMenuKind::String { options },
-                    )
-                    .placeholder("Choose a category…"),
+                .components(vec![serenity::CreateComponent::ActionRow(
+                    serenity::CreateActionRow::SelectMenu(
+                        serenity::CreateSelectMenu::new(
+                            cid_ctx_type_select(target_id.get()),
+                            serenity::CreateSelectMenuKind::String {
+                                options: options.into(),
+                            },
+                        )
+                        .placeholder("Choose a category…"),
+                    ),
                 )]),
         )
         .await?;

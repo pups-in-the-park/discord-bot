@@ -44,17 +44,21 @@ pub async fn handle(
     options.push(serenity::CreateSelectMenuOption::new("Ban", "ban"));
 
     ci.create_response(
-        ctx,
+        &ctx.http,
         serenity::CreateInteractionResponse::Message(
             serenity::CreateInteractionResponseMessage::new()
                 .ephemeral(true)
                 .content("Select the action to take against this user:")
-                .components(vec![serenity::CreateActionRow::SelectMenu(
-                    serenity::CreateSelectMenu::new(
-                        cid_report_action_chosen(report_id),
-                        serenity::CreateSelectMenuKind::String { options },
-                    )
-                    .placeholder("Choose action…"),
+                .components(vec![serenity::CreateComponent::ActionRow(
+                    serenity::CreateActionRow::SelectMenu(
+                        serenity::CreateSelectMenu::new(
+                            cid_report_action_chosen(report_id),
+                            serenity::CreateSelectMenuKind::String {
+                                options: options.into(),
+                            },
+                        )
+                        .placeholder("Choose action…"),
+                    ),
                 )]),
         ),
     )

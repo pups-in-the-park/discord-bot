@@ -20,12 +20,12 @@ pub async fn blocklist(_ctx: Context<'_>) -> Result<(), Error> {
 }
 
 /// Suggest "global" plus the guild's category names.
-pub(crate) async fn autocomplete_scope(
-    ctx: Context<'_>,
-    partial: &str,
-) -> Vec<serenity::AutocompleteChoice> {
+pub(crate) async fn autocomplete_scope<'a>(
+    ctx: Context<'a>,
+    partial: &'a str,
+) -> serenity::CreateAutocompleteResponse<'a> {
     let Some(guild_id) = ctx.guild_id() else {
-        return vec![];
+        return serenity::CreateAutocompleteResponse::new();
     };
     let partial_lower = partial.to_lowercase();
 
@@ -42,5 +42,5 @@ pub(crate) async fn autocomplete_scope(
         }
     }
 
-    choices
+    serenity::CreateAutocompleteResponse::new().set_choices(choices)
 }

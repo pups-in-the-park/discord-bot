@@ -27,11 +27,11 @@ pub async fn handle(
         .unwrap_or(true);
 
     guild_id
-        .ban_with_reason(
-            ctx,
+        .ban(
+            &ctx.http,
             serenity::UserId::new(target_id),
-            (delete_secs / 86400) as u8,
-            &reason,
+            delete_secs,
+            Some(&reason),
         )
         .await
         .ok();
@@ -57,7 +57,7 @@ pub async fn handle(
     }
 
     mi.create_response(
-        ctx,
+        &ctx.http,
         serenity::CreateInteractionResponse::Message(
             serenity::CreateInteractionResponseMessage::new()
                 .ephemeral(true)

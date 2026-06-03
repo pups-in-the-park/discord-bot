@@ -22,30 +22,17 @@ pub async fn create(ctx: Context<'_>) -> Result<(), Error> {
     crate::util::modal_response(
         ctx,
         serenity::CreateModal::new("m:cat:create", "Create Ticket Category").components(vec![
-            serenity::CreateActionRow::InputText(
-                serenity::CreateInputText::new(serenity::InputTextStyle::Short, "Internal Name", "cat_name")
-                    .required(true)
-                    .placeholder("e.g. general-support"),
-            ),
-            serenity::CreateActionRow::InputText(
-                serenity::CreateInputText::new(serenity::InputTextStyle::Short, "Button Label", "cat_label")
-                    .required(true)
-                    .placeholder("e.g. General Support"),
-            ),
-            serenity::CreateActionRow::InputText(
-                serenity::CreateInputText::new(serenity::InputTextStyle::Short, "Emoji (optional)", "cat_emoji")
-                    .required(false)
-                    .placeholder("e.g. 🎫"),
-            ),
-            serenity::CreateActionRow::InputText(
-                serenity::CreateInputText::new(serenity::InputTextStyle::Short, "Colour (hex, optional)", "cat_color")
-                    .required(false)
-                    .placeholder("e.g. 5865F2"),
-            ),
-            serenity::CreateActionRow::InputText(
-                serenity::CreateInputText::new(serenity::InputTextStyle::Short, "Description (shown in dropdowns)", "cat_description")
-                    .required(false)
-                    .placeholder("Brief description of what this category is for"),
+            crate::util::modal_input("Internal Name", "cat_name", false, true, Some("e.g. general-support"), None),
+            crate::util::modal_input("Button Label", "cat_label", false, true, Some("e.g. General Support"), None),
+            crate::util::modal_input("Emoji (optional)", "cat_emoji", false, false, Some("e.g. 🎫"), None),
+            crate::util::modal_input("Colour (hex, optional)", "cat_color", false, false, Some("e.g. 5865F2"), None),
+            crate::util::modal_input(
+                "Description (shown in dropdowns)",
+                "cat_description",
+                false,
+                false,
+                Some("Brief description of what this category is for"),
+                None,
             ),
         ]),
     )
@@ -189,19 +176,9 @@ pub async fn form_add(
     crate::util::modal_response(
         ctx,
         serenity::CreateModal::new(modal_id, "Add Form Field").components(vec![
-            serenity::CreateActionRow::InputText(
-                serenity::CreateInputText::new(serenity::InputTextStyle::Short, "Field Label", "ff_label")
-                    .required(true)
-                    .placeholder("e.g. Describe your issue"),
-            ),
-            serenity::CreateActionRow::InputText(
-                serenity::CreateInputText::new(serenity::InputTextStyle::Short, "Placeholder text (optional)", "ff_placeholder")
-                    .required(false),
-            ),
-            serenity::CreateActionRow::InputText(
-                serenity::CreateInputText::new(serenity::InputTextStyle::Short, "Max length (optional)", "ff_max_length")
-                    .required(false),
-            ),
+            crate::util::modal_input("Field Label", "ff_label", false, true, Some("e.g. Describe your issue"), None),
+            crate::util::modal_input("Placeholder text (optional)", "ff_placeholder", false, false, None, None),
+            crate::util::modal_input("Max length (optional)", "ff_max_length", false, false, None, None),
         ]),
     )
     .await?;
@@ -309,12 +286,13 @@ pub async fn form_list(
     Ok(())
 }
 
-pub async fn autocomplete_category(ctx: Context<'_>, partial: &str) -> Vec<serenity::AutocompleteChoice> {
+pub async fn autocomplete_category<'a>(ctx: Context<'a>, partial: &'a str) -> serenity::CreateAutocompleteResponse<'a> {
     let Some(guild_id) = ctx.guild_id() else {
-        return vec![];
+        return serenity::CreateAutocompleteResponse::new();
     };
     let p = partial.to_lowercase();
-    ctx.data()
+    let choices: Vec<_> = ctx
+        .data()
         .db
         .get_ticket_types(&guild_id.to_string())
         .await
@@ -322,15 +300,16 @@ pub async fn autocomplete_category(ctx: Context<'_>, partial: &str) -> Vec<seren
         .into_iter()
         .filter(|t| p.is_empty() || t.name.to_lowercase().contains(&p) || t.label.to_lowercase().contains(&p))
         .map(|t| serenity::AutocompleteChoice::new(t.label, t.name))
-        .collect()
+        .collect();
+    serenity::CreateAutocompleteResponse::new().set_choices(choices)
 }
 
-async fn autocomplete_form_field(ctx: Context<'_>, partial: &str) -> Vec<serenity::AutocompleteChoice> {
+async fn autocomplete_form_field<'a>(ctx: Context<'a>, partial: &'a str) -> serenity::CreateAutocompleteResponse<'a> {
     let Some(guild_id) = ctx.guild_id() else {
-        return vec![];
+        return serenity::CreateAutocompleteResponse::new();
     };
     let poise::Context::Application(app) = ctx else {
-        return vec![];
+        return serenity::CreateAutocompleteResponse::new();
     };
 
     // Read the already-typed "name" param from the interaction to scope the field list.
@@ -348,14 +327,15 @@ async fn autocomplete_form_field(ctx: Context<'_>, partial: &str) -> Vec<serenit
             }
         });
     let Some(cat_name) = cat_name else {
-        return vec![];
+        return serenity::CreateAutocompleteResponse::new();
     };
 
     let Ok(Some(cat)) = ctx.data().db.get_ticket_type_by_name(&guild_id.to_string(), &cat_name).await else {
-        return vec![];
+        return serenity::CreateAutocompleteResponse::new();
     };
 
-    ctx.data()
+    let choices: Vec<_> = ctx
+        .data()
         .db
         .get_form_fields(cat.id)
         .await
@@ -363,5 +343,6 @@ async fn autocomplete_form_field(ctx: Context<'_>, partial: &str) -> Vec<serenit
         .into_iter()
         .filter(|f| partial.is_empty() || f.label.to_lowercase().contains(&partial.to_lowercase()))
         .map(|f| serenity::AutocompleteChoice::new(f.label.clone(), f.label))
-        .collect()
+        .collect();
+    serenity::CreateAutocompleteResponse::new().set_choices(choices)
 }

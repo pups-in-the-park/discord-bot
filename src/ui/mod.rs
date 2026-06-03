@@ -20,7 +20,7 @@ pub use component::{
     action_row, separator, text, ActionRow, Button, ButtonStyle, Component, Container, Section,
     Separator, Spacing, TextDisplay,
 };
-pub use modal::{Modal, TextInput, TextInputStyle};
+pub use modal::{Label, Modal, TextInput, TextInputStyle};
 pub use respond::{edit, open_modal, respond_ephemeral, send, slash_respond, update};
 pub use select::{
     ChannelSelect, ChannelType, MentionableSelect, RoleSelect, SelectOption, StringSelect,
@@ -57,25 +57,41 @@ pub(crate) fn is_false(b: &bool) -> bool {
     !*b
 }
 
-/// Read a submitted text-input value out of a modal interaction's action rows by
-/// `custom_id`. serenity 0.12.5 models modal submissions as `Vec<ActionRow>` of
-/// `InputText`, so this is the only round-trippable read path. Used by the
-/// `#[derive(Cv2Modal)]`-generated `from_submission`.
-pub fn read_text<'a>(
-    components: &'a [poise::serenity_prelude::ActionRow],
-    custom_id: &str,
-) -> Option<&'a str> {
-    components
-        .iter()
-        .flat_map(|row| &row.components)
-        .find_map(|c| match c {
-            poise::serenity_prelude::ActionRowComponent::InputText(t)
-                if t.custom_id == custom_id =>
-            {
-                t.value.as_deref()
+use poise::serenity_prelude::{LabelComponent, ModalComponent};
+
+/// Read a submitted text-input value out of a modal submission by `custom_id`.
+///
+/// serenity `next` models modal submissions as `FixedArray<ModalComponent>` where
+/// each interactive field is a `Label` wrapping the actual `InputText`/`SelectMenu`
+/// (Discord's modal-components-v2 shape). Used by the `#[derive(Cv2Modal)]`-generated
+/// `from_submission` and the feature modal handlers.
+pub fn read_text<'a>(components: &'a [ModalComponent], custom_id: &str) -> Option<&'a str> {
+    components.iter().find_map(|c| match c {
+        ModalComponent::Label(label) => match &label.component {
+            LabelComponent::InputText(t) if t.custom_id.as_str() == custom_id => {
+                Some(t.value.as_str())
             }
             _ => None,
+        },
+        _ => None,
+    })
+}
+
+/// Read the selected values of a `Label`-wrapped select menu in a modal submission
+/// by `custom_id`. Returns an empty vec if the field is absent or nothing was chosen.
+pub fn read_multi_select(components: &[ModalComponent], custom_id: &str) -> Vec<String> {
+    components
+        .iter()
+        .find_map(|c| match c {
+            ModalComponent::Label(label) => match &label.component {
+                LabelComponent::SelectMenu(s) if s.custom_id.as_str() == custom_id => {
+                    Some(s.values.iter().map(|v| v.to_string()).collect::<Vec<_>>())
+                }
+                _ => None,
+            },
+            _ => None,
         })
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

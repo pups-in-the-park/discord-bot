@@ -58,7 +58,7 @@ pub async fn modal(ctx: &serenity::Context, data: &Arc<BotData>, mi: &serenity::
     if let Some(Err(e)) = handled {
         warn!("Modal handler error for '{}': {:?}", mi.data.custom_id, e);
         mi.create_response(
-            ctx,
+            &ctx.http,
             serenity::CreateInteractionResponse::Message(
                 serenity::CreateInteractionResponseMessage::new()
                     .ephemeral(true)

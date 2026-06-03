@@ -217,18 +217,25 @@ pub async fn publish(
     Ok(())
 }
 
-pub async fn autocomplete_panel(ctx: Context<'_>, partial: &str) -> Vec<serenity::AutocompleteChoice> {
+pub async fn autocomplete_panel<'a>(ctx: Context<'a>, partial: &'a str) -> serenity::CreateAutocompleteResponse<'a> {
     let Some(guild_id) = ctx.guild_id() else {
-        return vec![];
+        return serenity::CreateAutocompleteResponse::new();
     };
     let p = partial.to_lowercase();
-    ctx.data()
+    let choices: Vec<_> = ctx
+        .data()
         .db
         .get_panels(&guild_id.to_string())
         .await
         .unwrap_or_default()
         .into_iter()
         .filter(|panel| p.is_empty() || panel.title.to_lowercase().contains(&p))
-        .map(|panel| serenity::AutocompleteChoice::new(format!("[{}] {}", panel.id, panel.title), panel.id))
-        .collect()
+        .map(|panel| {
+            serenity::AutocompleteChoice::new(
+                format!("[{}] {}", panel.id, panel.title),
+                serenity::AutocompleteValue::Integer(panel.id as u64),
+            )
+        })
+        .collect();
+    serenity::CreateAutocompleteResponse::new().set_choices(choices)
 }

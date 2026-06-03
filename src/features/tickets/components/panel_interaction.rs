@@ -67,11 +67,11 @@ pub async fn handle(
     if ticket_type.has_form {
         let fields = data.db.get_form_fields(ticket_type_id).await?;
         let modal = build_open_modal(cid_open_modal(ticket_type_id), &ticket_type, &fields);
-        ci.create_response(ctx, serenity::CreateInteractionResponse::Modal(modal))
+        ci.create_response(&ctx.http, serenity::CreateInteractionResponse::Modal(modal))
             .await?;
     } else {
         // Acknowledge so the panel message stays as-is, then follow up ephemerally.
-        ci.create_response(ctx, serenity::CreateInteractionResponse::Acknowledge)
+        ci.create_response(&ctx.http, serenity::CreateInteractionResponse::Acknowledge)
             .await?;
 
         let guild_cfg = data.db.get_or_create_guild(&guild_id.to_string()).await?;

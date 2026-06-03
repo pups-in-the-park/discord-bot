@@ -17,7 +17,7 @@ pub async fn unban(
         .map_err(|_| Error::user("Invalid user ID."))?;
 
     guild_id
-        .unban(&ctx, uid)
+        .unban(&ctx.serenity_context().http, uid, Some(&reason))
         .await
         .map_err(|e| Error::user(format!("Failed to unban: {}", e)))?;
 
