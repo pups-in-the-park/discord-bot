@@ -1424,15 +1424,16 @@ impl Database {
         message_url: Option<&str>,
         message_content: Option<&str>,
         reason: Option<&str>,
+        profile_parts: Option<&str>,
     ) -> Result<Report> {
         let row = sqlx::query(
-            "INSERT INTO reports (guild_id,reporter_id,target_user_id,message_id,message_url,message_content,reason)
-             VALUES (?,?,?,?,?,?,?)
+            "INSERT INTO reports (guild_id,reporter_id,target_user_id,message_id,message_url,message_content,reason,profile_parts)
+             VALUES (?,?,?,?,?,?,?,?)
              RETURNING id,guild_id,reporter_id,target_user_id,message_id,message_url,message_content,
                        reason,card_message_id,thread_id,status,resolved_by,concern_raised,created_at,profile_parts",
         )
         .bind(guild_id).bind(reporter_id).bind(target_user_id)
-        .bind(message_id).bind(message_url).bind(message_content).bind(reason)
+        .bind(message_id).bind(message_url).bind(message_content).bind(reason).bind(profile_parts)
         .fetch_one(&self.pool).await?;
         Ok(Self::map_report(&row))
     }

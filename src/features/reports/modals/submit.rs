@@ -16,9 +16,12 @@ pub async fn handle(
     let Some(guild_id) = mi.guild_id else {
         return Ok(());
     };
-    let reason = modal_field(&mi.data.components, "report_reason")
+    let reason = modal_field(&mi.data.components, crate::ids::REPORT_REASON_FIELD)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
+    // Profile-part checkboxes (present only on the user/profile report modal).
+    let parts = crate::ui::read_checkbox_group(&mi.data.components, crate::ids::REPORT_PARTS_FIELD);
+    let profile_parts = (!parts.is_empty()).then(|| parts.join(","));
     let id = mi.data.custom_id.as_str();
 
     let (target_id, msg_id, msg_url, msg_content) =
@@ -73,6 +76,7 @@ pub async fn handle(
             msg_url.as_deref(),
             msg_content.as_deref(),
             reason.as_deref(),
+            profile_parts.as_deref(),
         )
         .await?;
 

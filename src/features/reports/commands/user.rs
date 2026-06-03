@@ -1,7 +1,7 @@
 use poise::serenity_prelude as serenity;
 
 use crate::context::{colours, Context, Error};
-use crate::ids::{cid_report_user_modal, REPORT_REASON_FIELD};
+use crate::ids::cid_report_user_modal;
 
 /// Report a user.
 #[poise::command(slash_command, guild_only)]
@@ -21,19 +21,12 @@ pub async fn user(
         return submit_user_report(ctx, target, reason).await;
     }
 
-    let modal_id = cid_report_user_modal(target.id.get());
     crate::util::modal_response(
         ctx,
-        serenity::CreateModal::new(modal_id, format!("Report {}", target.name)).components(vec![
-            crate::util::modal_input(
-                "Reason",
-                REPORT_REASON_FIELD,
-                true,
-                false,
-                Some("Describe your concern…"),
-                None,
-            ),
-        ]),
+        super::super::view::build_report_modal(
+            cid_report_user_modal(target.id.get()),
+            format!("Report {}", target.name),
+        ),
     )
     .await?;
     Ok(())
@@ -78,6 +71,7 @@ pub async fn submit_user_report(
             None,
             None,
             if reason.is_empty() { None } else { Some(reason.as_str()) },
+            None,
         )
         .await?;
 

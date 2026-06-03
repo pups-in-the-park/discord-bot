@@ -31,6 +31,10 @@ pub async fn handle(
         respond_ephemeral(ctx, ci, "This report has already been resolved.").await;
         return Ok(());
     }
+    if super::super::acting_on_own_report(ci.user.id, &report) {
+        respond_ephemeral(ctx, ci, super::super::SELF_ACTION_REFUSAL).await;
+        return Ok(());
+    }
 
     // Message-specific actions only apply when the report references a message.
     let mut options = Vec::new();

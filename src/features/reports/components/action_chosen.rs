@@ -37,6 +37,10 @@ pub async fn handle(
         respond_ephemeral(ctx, ci, "This report has already been resolved.").await;
         return Ok(());
     }
+    if super::super::acting_on_own_report(ci.user.id, &report) {
+        respond_ephemeral(ctx, ci, super::super::SELF_ACTION_REFUSAL).await;
+        return Ok(());
+    }
     let target_id: u64 = report.target_user_id.parse().unwrap_or(0);
 
     // "del" is handled inline — no modal needed.

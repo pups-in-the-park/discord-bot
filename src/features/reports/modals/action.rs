@@ -37,6 +37,10 @@ pub async fn handle(
         ephemeral_reply(ctx, mi, "This report has already been resolved.").await?;
         return Ok(());
     }
+    if super::super::acting_on_own_report(mi.user.id, &report) {
+        ephemeral_reply(ctx, mi, super::super::SELF_ACTION_REFUSAL).await?;
+        return Ok(());
+    }
     let reporter_id = report.reporter_id.clone();
 
     match action.as_str() {

@@ -21,7 +21,9 @@ pub use component::{
     Separator, Spacing, TextDisplay,
 };
 pub use modal::{Label, Modal, TextInput, TextInputStyle};
-pub use respond::{edit, open_modal, respond_ephemeral, send, slash_respond, update};
+pub use respond::{
+    edit, forward_message, open_modal, respond_ephemeral, send, slash_respond, update,
+};
 pub use select::{
     ChannelSelect, ChannelType, MentionableSelect, RoleSelect, SelectOption, StringSelect,
     UserSelect,
@@ -86,6 +88,23 @@ pub fn read_multi_select(components: &[ModalComponent], custom_id: &str) -> Vec<
             ModalComponent::Label(label) => match &label.component {
                 LabelComponent::SelectMenu(s) if s.custom_id.as_str() == custom_id => {
                     Some(s.values.iter().map(|v| v.to_string()).collect::<Vec<_>>())
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+/// Read the checked values of a `Label`-wrapped checkbox group in a modal
+/// submission by `custom_id`. Empty vec if the field is absent or nothing checked.
+pub fn read_checkbox_group(components: &[ModalComponent], custom_id: &str) -> Vec<String> {
+    components
+        .iter()
+        .find_map(|c| match c {
+            ModalComponent::Label(label) => match &label.component {
+                LabelComponent::CheckboxGroup(g) if g.custom_id.as_str() == custom_id => {
+                    Some(g.values.iter().map(|v| v.to_string()).collect::<Vec<_>>())
                 }
                 _ => None,
             },

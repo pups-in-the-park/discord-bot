@@ -30,6 +30,10 @@ pub async fn handle(
         respond_ephemeral(ctx, ci, "This report has already been resolved.").await;
         return Ok(());
     }
+    if super::super::acting_on_own_report(ci.user.id, &report) {
+        respond_ephemeral(ctx, ci, super::super::SELF_ACTION_REFUSAL).await;
+        return Ok(());
+    }
 
     let guild_cfg = data.db.get_or_create_guild(&guild_id.to_string()).await?;
     let reports_ch = guild_cfg
@@ -70,6 +74,7 @@ pub async fn handle(
 
     super::super::view::post_investigation_cards(
         ctx,
+        data,
         serenity::ChannelId::new(thread.id.get()),
         &report,
     )

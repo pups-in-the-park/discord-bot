@@ -32,6 +32,10 @@ pub async fn handle(
         respond_ephemeral(ctx, ci, "This report has already been resolved.").await;
         return Ok(());
     }
+    if super::super::acting_on_own_report(ci.user.id, &report) {
+        respond_ephemeral(ctx, ci, super::super::SELF_ACTION_REFUSAL).await;
+        return Ok(());
+    }
 
     data.db
         .resolve_report(report_id, "no_action", &ci.user.id.to_string())

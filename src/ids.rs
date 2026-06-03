@@ -278,6 +278,7 @@ pub const CID_RAID_CLEAR: &str = "raid:clear";
 pub const FORM_FIELD_BASE: &str = "ff_";
 pub const CLOSE_REASON_FIELD: &str = "close_reason";
 pub const REPORT_REASON_FIELD: &str = "report_reason";
+pub const REPORT_PARTS_FIELD: &str = "report_parts";
 pub const APPEAL_REASON_FIELD: &str = "appeal_reason";
 pub const CONCERN_REASON_FIELD: &str = "concern_reason";
 
