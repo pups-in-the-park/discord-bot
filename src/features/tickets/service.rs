@@ -60,9 +60,17 @@ pub async fn open_thread(
         )
         .await?;
 
-    ctx.http
+    // From here on the thread exists on Discord but isn't recorded yet. If a required
+    // step fails, delete the thread so we don't strand an orphan with no DB row (which
+    // would also leak the ticket number and confuse "max open" counting).
+    if let Err(e) = ctx
+        .http
         .add_thread_channel_member(thread.id, opts.owner_id)
-        .await?;
+        .await
+    {
+        thread.id.widen().delete(&ctx.http, None).await.ok();
+        return Err(e.into());
+    }
 
     let form_json = opts
         .form_responses
@@ -72,7 +80,7 @@ pub async fn open_thread(
     let reported_msg_id = opts.reported_message_id.map(|id| id.to_string());
     let reported_author_id = opts.reported_author_id.map(|id| id.to_string());
 
-    let ticket = data
+    let ticket = match data
         .db
         .create_ticket(
             opts.ticket_number,
@@ -87,7 +95,14 @@ pub async fn open_thread(
             opts.reported_message_content.as_deref(),
             reported_author_id.as_deref(),
         )
-        .await?;
+        .await
+    {
+        Ok(t) => t,
+        Err(e) => {
+            thread.id.widen().delete(&ctx.http, None).await.ok();
+            return Err(e);
+        }
+    };
 
     // Build ping content (sent as plain message so it actually notifies)
     let ping_roles = opts.ticket_type.ping_role_ids();
