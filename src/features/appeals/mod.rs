@@ -6,6 +6,7 @@ pub mod commands;
 pub mod components;
 pub mod modals;
 pub mod router;
+pub mod service;
 pub mod view;
 
 pub use commands::appeal;
