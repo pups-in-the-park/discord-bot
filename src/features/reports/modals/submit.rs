@@ -16,6 +16,18 @@ pub async fn handle(
     let Some(guild_id) = mi.guild_id else {
         return Ok(());
     };
+
+    // Fetching the reported message, posting the card (which gathers member + history
+    // context), and DMing can exceed the 3-second window — acknowledge first and send
+    // every reply (including validation rejections) as an ephemeral follow-up.
+    mi.create_response(
+        &ctx.http,
+        serenity::CreateInteractionResponse::Defer(
+            serenity::CreateInteractionResponseMessage::new().ephemeral(true),
+        ),
+    )
+    .await?;
+
     let reason = modal_field(&mi.data.components, crate::ids::REPORT_REASON_FIELD)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
@@ -102,19 +114,17 @@ pub async fn handle(
     Ok(())
 }
 
-/// Reply to a modal submission with a short ephemeral message.
+/// Reply to the (already-deferred) modal submission with a short ephemeral follow-up.
 async fn ephemeral_reply(
     ctx: &serenity::Context,
     mi: &serenity::ModalInteraction,
     msg: &str,
 ) -> Result<(), anyhow::Error> {
-    mi.create_response(
+    mi.create_followup(
         &ctx.http,
-        serenity::CreateInteractionResponse::Message(
-            serenity::CreateInteractionResponseMessage::new()
-                .ephemeral(true)
-                .content(msg),
-        ),
+        serenity::CreateInteractionResponseFollowup::new()
+            .ephemeral(true)
+            .content(msg),
     )
     .await?;
     Ok(())

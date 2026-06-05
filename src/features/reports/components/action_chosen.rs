@@ -43,8 +43,18 @@ pub async fn handle(
     }
     let target_id: u64 = report.target_user_id.parse().unwrap_or(0);
 
-    // "del" is handled inline — no modal needed.
+    // "del" is handled inline — no modal needed. Deleting the message, archiving the
+    // thread, and DMing the reporter can exceed the 3-second window, so acknowledge
+    // first and confirm via follow-up. (The other actions open a modal instead, which
+    // must remain the initial response and therefore can't be deferred.)
     if action == "del" {
+        ci.create_response(
+            &ctx.http,
+            serenity::CreateInteractionResponse::Defer(
+                serenity::CreateInteractionResponseMessage::new().ephemeral(true),
+            ),
+        )
+        .await?;
         if let Some(ref msg_url) = report.message_url {
             let url_parts: Vec<&str> = msg_url.split('/').collect();
             let n = url_parts.len();
@@ -69,7 +79,14 @@ pub async fn handle(
             .await
             .ok();
         super::super::view::notify_reporter_action_taken(ctx, &report.reporter_id).await;
-        respond_ephemeral(ctx, ci, "Message deleted. Report resolved and thread archived.").await;
+        ci.create_followup(
+            &ctx.http,
+            serenity::CreateInteractionResponseFollowup::new()
+                .ephemeral(true)
+                .content("Message deleted. Report resolved and thread archived."),
+        )
+        .await
+        .ok();
         return Ok(());
     }
 
