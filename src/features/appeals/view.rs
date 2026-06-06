@@ -115,17 +115,24 @@ pub async fn notify_appeal_resolved(
     let Ok(dm) = user.create_dm_channel(http).await else {
         return;
     };
+    let accepted = status == "accepted";
     let mut text = format!(
         "**Your appeal has been {}**\n\nResponse: {}",
-        if status == "accepted" { "accepted" } else { "denied" },
+        if accepted { "accepted" } else { "denied" },
         response,
     );
     if let Some(url) = invite_url {
         text.push_str(&format!("\n\n[Click here to rejoin the server]({})", url));
     }
-    let card = Container::new(vec![ui::text(text)])
-        .accent(if status == "accepted" { colours::GREEN.0 } else { colours::RED.0 });
-    ui::send(http, dm.id, &[card.into()]).await.ok();
+    // Read-only notice (no buttons) → embed. The rejoin link stays a markdown link.
+    let embed = serenity::CreateEmbed::new()
+        .colour(if accepted { colours::GREEN } else { colours::RED })
+        .description(text);
+    dm.id
+        .widen()
+        .send_message(http, serenity::CreateMessage::new().embed(embed))
+        .await
+        .ok();
 }
 
 /// DM the appellant that their appeal was denied, with a "Report a Concern" button.
