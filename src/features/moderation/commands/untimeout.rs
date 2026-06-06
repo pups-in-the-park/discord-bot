@@ -1,7 +1,10 @@
 use poise::serenity_prelude as serenity;
 
 use crate::context::{colours, Context, Error};
-use crate::features::moderation::view::log_action;
+use crate::features::moderation::{
+    service::{send_action_dm, ModActionDm},
+    view::log_action,
+};
 
 /// Remove a timeout from a user.
 #[poise::command(slash_command, guild_only, default_member_permissions = "MODERATE_MEMBERS")]
@@ -13,7 +16,11 @@ pub async fn untimeout(
     let guild_id = ctx.guild_id().unwrap();
 
     guild_id
-        .edit_member(&ctx, user.id, serenity::EditMember::new().enable_communication())
+        .edit_member(
+            &ctx.serenity_context().http,
+            user.id,
+            serenity::EditMember::new().enable_communication(),
+        )
         .await
         .map_err(|e| Error::user(format!("Failed to remove timeout: {}", e)))?;
 
@@ -31,11 +38,14 @@ pub async fn untimeout(
         )
         .await?;
 
+    send_action_dm(&ctx.serenity_context().http, &user, guild_id, ModActionDm::Untimeout, None).await;
+
     log_action(
         ctx.serenity_context(),
-        ctx.data(),
+        &ctx.data(),
         guild_id,
-        "⏱️ Timeout Removed",
+        "untimeout",
+        None,
         &user,
         ctx.author(),
         &reason,

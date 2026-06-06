@@ -16,9 +16,24 @@ pub async fn handle(
     let Some(guild_id) = mi.guild_id else {
         return Ok(());
     };
-    let reason = modal_field(&mi.data.components, "report_reason")
+
+    // Fetching the reported message, posting the card (which gathers member + history
+    // context), and DMing can exceed the 3-second window — acknowledge first and send
+    // every reply (including validation rejections) as an ephemeral follow-up.
+    mi.create_response(
+        &ctx.http,
+        serenity::CreateInteractionResponse::Defer(
+            serenity::CreateInteractionResponseMessage::new().ephemeral(true),
+        ),
+    )
+    .await?;
+
+    let reason = modal_field(&mi.data.components, crate::ids::REPORT_REASON_FIELD)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
+    // Profile-part checkboxes (present only on the user/profile report modal).
+    let parts = crate::ui::read_checkbox_group(&mi.data.components, crate::ids::REPORT_PARTS_FIELD);
+    let profile_parts = (!parts.is_empty()).then(|| parts.join(","));
     let id = mi.data.custom_id.as_str();
 
     let (target_id, msg_id, msg_url, msg_content) =
@@ -30,10 +45,10 @@ pub async fn handle(
             // Best-effort: fetch the reported message so the card can show its content.
             let content = ctx
                 .http
-                .get_message(serenity::ChannelId::new(chan_id), serenity::MessageId::new(msg_id_val))
+                .get_message(serenity::ChannelId::new(chan_id).widen(), serenity::MessageId::new(msg_id_val))
                 .await
                 .ok()
-                .map(|m| m.content)
+                .map(|m| m.content.to_string())
                 .filter(|c| !c.is_empty());
             (author_id.to_string(), Some(msg_id_val.to_string()), Some(msg_url), content)
         } else {
@@ -42,6 +57,11 @@ pub async fn handle(
 
     let gid = guild_id.to_string();
     let reporter_id = mi.user.id.to_string();
+
+    if let Some(block) = data.db.get_active_block(&gid, &reporter_id, "reports").await? {
+        ephemeral_reply(ctx, mi, &crate::features::blocklist::view::blocked_text(&block)).await?;
+        return Ok(());
+    }
 
     // A report is only actionable if there's a reports channel to surface its card.
     let guild_cfg = data.db.get_or_create_guild(&gid).await?;
@@ -73,6 +93,7 @@ pub async fn handle(
             msg_url.as_deref(),
             msg_content.as_deref(),
             reason.as_deref(),
+            profile_parts.as_deref(),
         )
         .await?;
 
@@ -93,19 +114,17 @@ pub async fn handle(
     Ok(())
 }
 
-/// Reply to a modal submission with a short ephemeral message.
+/// Reply to the (already-deferred) modal submission with a short ephemeral follow-up.
 async fn ephemeral_reply(
     ctx: &serenity::Context,
     mi: &serenity::ModalInteraction,
     msg: &str,
 ) -> Result<(), anyhow::Error> {
-    mi.create_response(
-        ctx,
-        serenity::CreateInteractionResponse::Message(
-            serenity::CreateInteractionResponseMessage::new()
-                .ephemeral(true)
-                .content(msg),
-        ),
+    mi.create_followup(
+        &ctx.http,
+        serenity::CreateInteractionResponseFollowup::new()
+            .ephemeral(true)
+            .content(msg),
     )
     .await?;
     Ok(())

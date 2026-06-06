@@ -1,7 +1,10 @@
 use poise::serenity_prelude as serenity;
 
 use crate::context::{colours, Context, Error};
-use crate::features::moderation::{service::send_action_dm, view::log_action};
+use crate::features::moderation::{
+    service::{send_action_dm, ModActionDm},
+    view::log_action,
+};
 use crate::permissions::validate_target;
 
 /// Kick a user from the server.
@@ -17,16 +20,23 @@ pub async fn kick(
 
     let mod_cfg = ctx.data().db.get_or_create_mod_config(&gid).await?;
     if mod_cfg.dm_on_kick {
-        send_action_dm(&ctx.serenity_context().http, &user, guild_id, "👢 Kicked", &reason, None)
-            .await;
+        send_action_dm(
+            &ctx.serenity_context().http,
+            &user,
+            guild_id,
+            ModActionDm::Kick { reason: &reason },
+            None,
+        )
+        .await;
     }
 
     guild_id
-        .kick_with_reason(&ctx, user.id, &reason)
+        .kick(&ctx.serenity_context().http, user.id, Some(&reason))
         .await
         .map_err(|e| Error::user(format!("Failed to kick user: {}", e)))?;
 
-    ctx.data()
+    let infraction = ctx
+        .data()
         .db
         .create_infraction(
             &gid,
@@ -42,9 +52,10 @@ pub async fn kick(
 
     log_action(
         ctx.serenity_context(),
-        ctx.data(),
+        &ctx.data(),
         guild_id,
-        "👢 Member Kicked",
+        "kick",
+        Some(infraction.id),
         &user,
         ctx.author(),
         &reason,

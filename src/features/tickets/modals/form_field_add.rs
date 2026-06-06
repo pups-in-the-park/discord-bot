@@ -26,7 +26,7 @@ pub async fn handle(
     data.db.set_ticket_type_has_form(type_id, true).await?;
 
     mi.create_response(
-        ctx,
+        &ctx.http,
         serenity::CreateInteractionResponse::Message(
             serenity::CreateInteractionResponseMessage::new()
                 .ephemeral(true)

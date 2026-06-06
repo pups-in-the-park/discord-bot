@@ -132,14 +132,14 @@ fn cv2modal_into_modal_emits_db_defaults() {
     assert_eq!(json["title"], "🏷️ Edit Basic Info");
 
     let rows = json["components"].as_array().unwrap();
-    // One Action-Row (type 1) per field, each wrapping a text input (type 4).
+    // One Label (type 18) per field, each wrapping a text input (type 4).
     assert_eq!(rows.len(), 4);
-    let input = |row: &serde_json::Value| row["components"][0].clone();
+    let input = |row: &serde_json::Value| row["component"].clone();
 
-    assert_eq!(rows[0]["type"], 1);
+    assert_eq!(rows[0]["type"], 18); // Label
+    assert_eq!(rows[0]["label"], "Button Label"); // label lives on the Label
     assert_eq!(input(&rows[0])["type"], 4);
     assert_eq!(input(&rows[0])["custom_id"], "cat_label");
-    assert_eq!(input(&rows[0])["label"], "Button Label");
     assert_eq!(input(&rows[0])["value"], "General Support"); // DB default
     assert_eq!(input(&rows[0])["required"], true); // String → required
     assert_eq!(input(&rows[0])["style"], 1); // short
@@ -158,21 +158,18 @@ fn cv2modal_into_modal_emits_db_defaults() {
 fn cv2modal_from_submission_round_trips_through_serenity() {
     use poise::serenity_prelude as serenity;
 
-    // Exactly the JSON Discord sends back for an Action-Row text-input submission,
-    // parsed by serenity 0.12.5's own `ActionRow` deserializer.
-    let submitted = serde_json::json!([
-        { "type": 1, "components": [
-            { "type": 4, "custom_id": "cat_label", "value": "Billing Help" } ] },
-        { "type": 1, "components": [
-            { "type": 4, "custom_id": "cat_emoji", "value": "💳" } ] },
-        { "type": 1, "components": [
-            { "type": 4, "custom_id": "cat_color", "value": "" } ] },
-        { "type": 1, "components": [
-            { "type": 4, "custom_id": "cat_desc", "value": "  payment questions  " } ] },
-    ]);
-    let rows: Vec<serenity::ActionRow> = serde_json::from_value(submitted).unwrap();
+    // Exactly the JSON Discord sends back for a modal-v2 (`Label`-wrapped)
+    // submission. `ModalComponent`'s deserializer borrows `&RawValue`, so this must
+    // be parsed from a string (not a `serde_json::Value`).
+    let submitted = r#"[
+        { "type": 18, "component": { "type": 4, "custom_id": "cat_label", "value": "Billing Help" } },
+        { "type": 18, "component": { "type": 4, "custom_id": "cat_emoji", "value": "💳" } },
+        { "type": 18, "component": { "type": 4, "custom_id": "cat_color", "value": "" } },
+        { "type": 18, "component": { "type": 4, "custom_id": "cat_desc", "value": "  payment questions  " } }
+    ]"#;
+    let components: Vec<serenity::ModalComponent> = serde_json::from_str(submitted).unwrap();
 
-    let parsed = CategoryBasicModal::from_components(&rows).unwrap();
+    let parsed = CategoryBasicModal::from_components(&components).unwrap();
 
     assert_eq!(
         parsed,

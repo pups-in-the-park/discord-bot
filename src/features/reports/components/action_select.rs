@@ -31,6 +31,10 @@ pub async fn handle(
         respond_ephemeral(ctx, ci, "This report has already been resolved.").await;
         return Ok(());
     }
+    if super::super::acting_on_own_report(ci.user.id, &report) {
+        respond_ephemeral(ctx, ci, super::super::SELF_ACTION_REFUSAL).await;
+        return Ok(());
+    }
 
     // Message-specific actions only apply when the report references a message.
     let mut options = Vec::new();
@@ -44,17 +48,21 @@ pub async fn handle(
     options.push(serenity::CreateSelectMenuOption::new("Ban", "ban"));
 
     ci.create_response(
-        ctx,
+        &ctx.http,
         serenity::CreateInteractionResponse::Message(
             serenity::CreateInteractionResponseMessage::new()
                 .ephemeral(true)
                 .content("Select the action to take against this user:")
-                .components(vec![serenity::CreateActionRow::SelectMenu(
-                    serenity::CreateSelectMenu::new(
-                        cid_report_action_chosen(report_id),
-                        serenity::CreateSelectMenuKind::String { options },
-                    )
-                    .placeholder("Choose action…"),
+                .components(vec![serenity::CreateComponent::ActionRow(
+                    serenity::CreateActionRow::SelectMenu(
+                        serenity::CreateSelectMenu::new(
+                            cid_report_action_chosen(report_id),
+                            serenity::CreateSelectMenuKind::String {
+                                options: options.into(),
+                            },
+                        )
+                        .placeholder("Choose action…"),
+                    ),
                 )]),
         ),
     )

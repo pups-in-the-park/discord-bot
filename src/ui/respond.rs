@@ -19,7 +19,29 @@ pub async fn send(
     components: &[Component],
 ) -> Result<serenity::Message> {
     let body = serde_json::json!({ "flags": CV2_FLAG, "components": components_json(components) });
-    Ok(http.send_message(channel_id, vec![], &body).await?)
+    Ok(http.send_message(channel_id.widen(), vec![], &body).await?)
+}
+
+/// Forward an existing message into `channel_id` (Discord message forwarding —
+/// `message_reference` type 1). Preserves the original's content, attachments, and
+/// embeds as a snapshot, giving moderators full context. Errors (e.g. the message
+/// was deleted) are the caller's to fall back from.
+pub async fn forward_message(
+    http: &serenity::Http,
+    channel_id: serenity::ChannelId,
+    source_channel: serenity::ChannelId,
+    message_id: serenity::MessageId,
+    guild_id: serenity::GuildId,
+) -> Result<serenity::Message> {
+    let body = serde_json::json!({
+        "message_reference": {
+            "type": 1,
+            "message_id": message_id.to_string(),
+            "channel_id": source_channel.to_string(),
+            "guild_id": guild_id.to_string(),
+        }
+    });
+    Ok(http.send_message(channel_id.widen(), vec![], &body).await?)
 }
 
 /// Edit an existing message to a new CV2 component tree.
@@ -30,7 +52,7 @@ pub async fn edit(
     components: &[Component],
 ) -> Result<serenity::Message> {
     let body = serde_json::json!({ "flags": CV2_FLAG, "components": components_json(components) });
-    Ok(http.edit_message(channel_id, message_id, &body, vec![]).await?)
+    Ok(http.edit_message(channel_id.widen(), message_id, &body, vec![]).await?)
 }
 
 /// Respond to a component interaction with a new ephemeral CV2 message (type 4).

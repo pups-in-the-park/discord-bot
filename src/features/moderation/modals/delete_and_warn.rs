@@ -3,7 +3,7 @@ use std::sync::Arc;
 use poise::serenity_prelude as serenity;
 
 use crate::context::BotData;
-use crate::features::moderation::service::send_action_dm;
+use crate::features::moderation::service::{send_action_dm, ModActionDm};
 use crate::ids::parse_mod_dw_modal;
 use crate::util::modal_field;
 
@@ -23,7 +23,8 @@ pub async fn handle(
         .to_string();
 
     serenity::ChannelId::new(chan_id)
-        .delete_message(ctx, serenity::MessageId::new(msg_id))
+        .widen()
+        .delete_message(&ctx.http, serenity::MessageId::new(msg_id), None)
         .await
         .ok();
 
@@ -48,15 +49,14 @@ pub async fn handle(
             &ctx.http,
             &target,
             guild_id,
-            "⚠️ Warning (message deleted)",
-            &reason,
+            ModActionDm::Warn { reason: &reason },
             Some((infraction.id, guild_id)),
         )
         .await;
     }
 
     mi.create_response(
-        ctx,
+        &ctx.http,
         serenity::CreateInteractionResponse::Message(
             serenity::CreateInteractionResponseMessage::new()
                 .ephemeral(true)

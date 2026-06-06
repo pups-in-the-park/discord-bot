@@ -21,9 +21,57 @@ pub async fn handle(
         .unwrap_or("")
         .to_string();
 
+    // Blocklist check — but a `concerns` block never bars raising a concern about a
+    // denied appeal (kind == "appeal"); that escape hatch always stays open.
+    if kind != "appeal" {
+        if let Some(block) = data
+            .db
+            .get_active_block(&guild_id.to_string(), &mi.user.id.to_string(), "concerns")
+            .await?
+        {
+            mi.create_response(
+                &ctx.http,
+                serenity::CreateInteractionResponse::Message(
+                    serenity::CreateInteractionResponseMessage::new()
+                        .ephemeral(true)
+                        .content(crate::features::blocklist::view::blocked_text(&block)),
+                ),
+            )
+            .await?;
+            return Ok(());
+        }
+    }
+
+    // Attribute the concern to the moderator whose decision it challenges, so the
+    // accountability stats can answer "who is getting more concerns?".
+    let target_moderator_id = match kind.as_str() {
+        "appeal" => data
+            .db
+            .get_appeal_by_id(source_id)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|a| a.responded_by),
+        "report" => data
+            .db
+            .get_report_by_id(source_id)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|r| r.resolved_by),
+        _ => None,
+    };
+
     let concern = data
         .db
-        .create_concern(&guild_id.to_string(), &mi.user.id.to_string(), &kind, source_id, &reason)
+        .create_concern(
+            &guild_id.to_string(),
+            &mi.user.id.to_string(),
+            &kind,
+            source_id,
+            &reason,
+            target_moderator_id.as_deref(),
+        )
         .await?;
 
     let guild_cfg = data.db.get_or_create_guild(&guild_id.to_string()).await?;
@@ -32,13 +80,12 @@ pub async fn handle(
             ctx,
             serenity::ChannelId::new(concerns_ch),
             &concern,
-            mi.user.id,
         )
         .await;
     }
 
     mi.create_response(
-        ctx,
+        &ctx.http,
         serenity::CreateInteractionResponse::Message(
             serenity::CreateInteractionResponseMessage::new()
                 .ephemeral(true)

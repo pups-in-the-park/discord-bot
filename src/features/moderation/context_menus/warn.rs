@@ -12,14 +12,13 @@ pub async fn warn_user(ctx: Context<'_>, target: serenity::User) -> Result<(), E
     crate::util::modal_response(
         ctx,
         serenity::CreateModal::new(cid_mod_warn_modal(target.id.get()), "⚠️ Warn User").components(
-            vec![serenity::CreateActionRow::InputText(
-                serenity::CreateInputText::new(
-                    serenity::InputTextStyle::Short,
-                    "Reason for warning",
-                    "reason",
-                )
-                .required(true)
-                .placeholder("e.g. Violation of rule #3 (respect)"),
+            vec![crate::util::modal_input(
+                "Reason for warning",
+                "reason",
+                false,
+                true,
+                Some("e.g. Violation of rule #3 (respect)"),
+                None,
             )],
         ),
     )

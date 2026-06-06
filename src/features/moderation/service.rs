@@ -8,14 +8,93 @@ use crate::context::colours;
 use crate::ids::cid_appeal_btn;
 use crate::ui::{self, Button, ButtonStyle, Container};
 
-/// DM a user that a moderation action was taken against them, with an optional
-/// "Appeal this action" button when the infraction is appealable.
+/// The moderation action a DM describes. Carries just enough to write copy that
+/// leads with what the member needs to know (and, for timeouts, when it ends).
+pub enum ModActionDm<'a> {
+    Warn { reason: &'a str },
+    Timeout { reason: &'a str, until: serenity::Timestamp },
+    Kick { reason: &'a str },
+    Ban { reason: &'a str },
+    Untimeout,
+    Unban,
+    /// Blocked from a feature (tickets/reports/concerns/appeals). `expires_ts` is a
+    /// unix timestamp, or `None` for a permanent block.
+    Blocklist { reason: &'a str, feature: &'a str, expires_ts: Option<i64> },
+}
+
+impl ModActionDm<'_> {
+    /// The accent colour for the DM card.
+    fn accent(&self) -> u32 {
+        match self {
+            ModActionDm::Warn { .. } | ModActionDm::Timeout { .. } => colours::YELLOW.0,
+            ModActionDm::Kick { .. } | ModActionDm::Blocklist { .. } => colours::ORANGE.0,
+            ModActionDm::Ban { .. } => colours::RED.0,
+            ModActionDm::Untimeout | ModActionDm::Unban => colours::GREEN.0,
+        }
+    }
+
+    /// Natural-language body, leading with the outcome and what to do next.
+    fn body(&self, guild: &str) -> String {
+        // Trim placeholder reasons so we don't print "Reason: No reason given".
+        let reason_line = |reason: &str| {
+            let r = reason.trim();
+            if r.is_empty() || r.eq_ignore_ascii_case("no reason given") {
+                String::new()
+            } else {
+                format!("\n**Why:** {r}")
+            }
+        };
+        match self {
+            ModActionDm::Warn { reason } => format!(
+                "⚠️ **You've received a warning in {guild}.**{}\n\nPlease take a moment to review the \
+                 server rules — further issues may lead to a timeout or removal.",
+                reason_line(reason)
+            ),
+            ModActionDm::Timeout { reason, until } => format!(
+                "⏱️ **You've been timed out in {guild}.**\nYou won't be able to send messages, react, \
+                 or speak in voice until <t:{ts}:F> (<t:{ts}:R>).{}",
+                reason_line(reason),
+                ts = until.unix_timestamp(),
+            ),
+            ModActionDm::Kick { reason } => format!(
+                "👢 **You've been removed from {guild}.**{}\n\nYou're welcome to rejoin with a valid \
+                 invite, but please follow the rules.",
+                reason_line(reason)
+            ),
+            ModActionDm::Ban { reason } => format!(
+                "🔨 **You've been banned from {guild}.**{}",
+                reason_line(reason)
+            ),
+            ModActionDm::Untimeout => format!(
+                "✅ **Your timeout in {guild} has been lifted.** You can take part again — thanks for \
+                 your patience."
+            ),
+            ModActionDm::Unban => format!(
+                "✅ **Your ban from {guild} has been lifted.** You're welcome to rejoin with a valid invite."
+            ),
+            ModActionDm::Blocklist { reason, feature, expires_ts } => {
+                let expiry = match expires_ts {
+                    Some(ts) => format!("\nThis block lifts <t:{ts}:R>."),
+                    None => "\nThis block does not expire.".to_string(),
+                };
+                format!(
+                    "🚫 **You've been blocked from {feature} in {guild}.**{}{}",
+                    reason_line(reason),
+                    expiry
+                )
+            }
+        }
+    }
+}
+
+/// DM a user about a moderation action in natural language, with an optional
+/// "Appeal this action" button when the infraction is appealable. Best-effort:
+/// silently does nothing if the user's DMs are closed.
 pub async fn send_action_dm(
     http: &serenity::Http,
     user: &serenity::User,
     guild_id: serenity::GuildId,
-    action_label: &str,
-    reason: &str,
+    action: ModActionDm<'_>,
     appeal_info: Option<(i64, serenity::GuildId)>,
 ) {
     let dm_channel = match user.create_dm_channel(http).await {
@@ -23,29 +102,30 @@ pub async fn send_action_dm(
         Err(_) => return,
     };
 
-    let mut components: Vec<ui::Component> = vec![ui::text(format!(
-        "**You have received a moderation action**\n\
-        Action: {}\nReason: {}\nServer: {}",
-        action_label, reason, guild_id,
-    ))];
+    // Prefer the guild's real name over a bare id.
+    let guild = guild_id
+        .to_partial_guild(http)
+        .await
+        .map(|g| g.name.to_string())
+        .unwrap_or_else(|_| "the server".to_string());
 
-    let mut btns: Vec<ui::Component> = vec![];
+    let mut body = action.body(&guild);
+
+    let mut components: Vec<ui::Component> = Vec::new();
     if let Some((infraction_id, gid)) = appeal_info {
-        btns.push(
-            Button::new(
-                cid_appeal_btn(infraction_id, gid.get()),
-                "Appeal this action",
-                ButtonStyle::Secondary,
-            )
-            .emoji("📝")
-            .into(),
-        );
+        body.push_str("\n\nIf you believe this was a mistake, you can appeal below.");
+        components.push(ui::text(body));
+        components.push(ui::action_row(vec![Button::new(
+            cid_appeal_btn(infraction_id, gid.get()),
+            "Appeal this action",
+            ButtonStyle::Secondary,
+        )
+        .emoji("📝")
+        .into()]));
+    } else {
+        components.push(ui::text(body));
     }
 
-    if !btns.is_empty() {
-        components.push(ui::action_row(btns));
-    }
-
-    let card = Container::new(components).accent(colours::ORANGE.0);
+    let card = Container::new(components).accent(action.accent());
     ui::send(http, dm_channel.id, &[card.into()]).await.ok();
 }

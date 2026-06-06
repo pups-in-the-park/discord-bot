@@ -5,10 +5,31 @@ use poise::serenity_prelude as serenity;
 
 use crate::context::colours;
 use crate::db::{Appeal, Infraction};
-use crate::ids::cid_concern_btn;
-use crate::ui::{self, Button, ButtonStyle, Container};
+use crate::ids::{cid_appeal_resolve, cid_concern_btn};
+use crate::ui::{self, Button, ButtonStyle, Container, Spacing};
 
-/// Post the staff-facing appeal card to `#appeals`; returns its message id.
+/// Accept / Deny / View-thread buttons shown to staff on the appeal card and intro.
+fn resolve_buttons(appeal: &Appeal, thread_id: serenity::ChannelId) -> ui::Component {
+    let accept = Button::new(cid_appeal_resolve(appeal.id, true), "Accept", ButtonStyle::Success)
+        .emoji("✅");
+    let deny = Button::new(cid_appeal_resolve(appeal.id, false), "Deny", ButtonStyle::Danger)
+        .emoji("❌");
+    let mut row = vec![accept.into(), deny.into()];
+    if let Ok(gid) = appeal.guild_id.parse::<u64>() {
+        row.push(
+            Button::link(
+                format!("https://discord.com/channels/{}/{}", gid, thread_id),
+                "View Thread",
+            )
+            .into(),
+        );
+    }
+    ui::action_row(row)
+}
+
+/// Post the staff-facing appeal card to `#appeals`; returns its message id. The card
+/// links the private review thread (so it isn't opened silently) and carries the
+/// Accept/Deny buttons that resolve the appeal without leaving the channel.
 pub async fn post_appeal_card(
     ctx: &serenity::Context,
     appeals_ch: serenity::ChannelId,
@@ -16,21 +37,28 @@ pub async fn post_appeal_card(
     infraction: &Infraction,
     appellant: serenity::UserId,
     reason: &str,
+    thread_id: serenity::ChannelId,
 ) -> anyhow::Result<serenity::Message> {
-    let card = Container::new(vec![ui::text(format!(
-        "**📝 New Appeal — #{}**\nUser: <@{}>\nInfraction: {} — {}\nAppeal reason: {}\nSubmitted: <t:{}:R>",
-        appeal.id,
-        appellant,
-        infraction.kind,
-        infraction.reason,
-        reason,
-        chrono::Utc::now().timestamp(),
-    ))])
+    let card = Container::new(vec![
+        ui::text(format!(
+            "**📝 New Appeal — #{}**\nUser: <@{}>\nInfraction: {} — {}\nAppeal reason: {}\nReview thread: <#{}>\nSubmitted: <t:{}:R>",
+            appeal.id,
+            appellant,
+            infraction.kind,
+            infraction.reason,
+            reason,
+            thread_id,
+            chrono::Utc::now().timestamp(),
+        )),
+        ui::separator(false, Spacing::Small),
+        resolve_buttons(appeal, thread_id),
+    ])
     .accent(colours::ORANGE.0);
     ui::send(&ctx.http, appeals_ch, &[card.into()]).await
 }
 
-/// Post the appeal detail card inside the private appeal thread.
+/// Post the appeal detail card inside the private appeal thread, with the same
+/// Accept/Deny buttons so staff can resolve it from wherever they're reading.
 pub async fn post_appeal_thread_intro(
     ctx: &serenity::Context,
     thread_id: serenity::ChannelId,
@@ -39,10 +67,14 @@ pub async fn post_appeal_thread_intro(
     appellant: serenity::UserId,
     reason: &str,
 ) {
-    let card = Container::new(vec![ui::text(format!(
-        "**Appeal #{} — {}**\nUser: <@{}>\nOriginal infraction: {} — {}\n\n**Appeal reason:**\n{}",
-        appeal.id, infraction.kind, appellant, infraction.kind, infraction.reason, reason,
-    ))])
+    let card = Container::new(vec![
+        ui::text(format!(
+            "**Appeal #{} — {}**\nUser: <@{}>\nOriginal infraction: {} — {}\n\n**Appeal reason:**\n{}",
+            appeal.id, infraction.kind, appellant, infraction.kind, infraction.reason, reason,
+        )),
+        ui::separator(false, Spacing::Small),
+        resolve_buttons(appeal, thread_id),
+    ])
     .accent(colours::BLURPLE.0);
     ui::send(&ctx.http, thread_id, &[card.into()]).await.ok();
 }

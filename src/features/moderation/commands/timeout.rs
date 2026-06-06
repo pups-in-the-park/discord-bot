@@ -2,7 +2,10 @@ use poise::serenity_prelude as serenity;
 
 use super::TimeoutDuration;
 use crate::context::{colours, Context, Error};
-use crate::features::moderation::{service::send_action_dm, view::log_action};
+use crate::features::moderation::{
+    service::{send_action_dm, ModActionDm},
+    view::log_action,
+};
 use crate::permissions::validate_target;
 use crate::util::format_duration;
 
@@ -24,20 +27,18 @@ pub async fn timeout(
     )
     .map_err(|_| Error::user("Failed to compute timeout timestamp."))?;
 
-    let until_str = until
-        .to_rfc3339()
-        .ok_or_else(|| Error::user("Failed to format timeout timestamp."))?;
+    let until_str = until.to_rfc3339();
 
     guild_id
         .edit_member(
-            &ctx,
+            &ctx.serenity_context().http,
             user.id,
-            serenity::EditMember::new().disable_communication_until(until_str),
+            serenity::EditMember::new().disable_communication_until(until),
         )
         .await
         .map_err(|e| Error::user(format!("Failed to timeout user: {}", e)))?;
 
-    let expires_at = until.to_rfc3339();
+    let expires_at = until_str;
     let infraction = ctx
         .data()
         .db
@@ -49,7 +50,7 @@ pub async fn timeout(
             &reason,
             Some(secs),
             true,
-            expires_at.as_deref(),
+            Some(expires_at.as_str()),
         )
         .await?;
 
@@ -59,22 +60,23 @@ pub async fn timeout(
             &ctx.serenity_context().http,
             &user,
             guild_id,
-            &format!("⏱️ Timeout ({})", format_duration(secs)),
-            &reason,
+            ModActionDm::Timeout { reason: &reason, until },
             Some((infraction.id, guild_id)),
         )
         .await;
     }
 
+    let info = format!("{} · ends <t:{}:R>", format_duration(secs), until.unix_timestamp());
     log_action(
         ctx.serenity_context(),
-        ctx.data(),
+        &ctx.data(),
         guild_id,
-        "⏱️ Member Timed Out",
+        "timeout",
+        Some(infraction.id),
         &user,
         ctx.author(),
         &reason,
-        Some(&format_duration(secs)),
+        Some(&info),
     )
     .await;
 

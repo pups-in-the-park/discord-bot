@@ -23,7 +23,7 @@ pub async fn handle(
     data.db.claim_ticket(ticket_id, &ci.user.id.to_string()).await?;
 
     ci.create_response(
-        ctx,
+        &ctx.http,
         serenity::CreateInteractionResponse::Message(
             serenity::CreateInteractionResponseMessage::new()
                 .content(format!("✋ <@{}> has claimed this ticket.", ci.user.id)),

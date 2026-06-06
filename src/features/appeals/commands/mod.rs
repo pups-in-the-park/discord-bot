@@ -17,10 +17,9 @@ pub async fn appeal(_ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-/// Shared accept/deny logic: resolve the appeal, update the card, archive the
-/// thread, unban if applicable, and DM the appellant.
+/// Shared accept/deny logic: resolve the appeal (DB, card, thread, unban, DM) via
+/// [`super::service::resolve`], then confirm to the moderator. Runs inside a thread.
 pub(crate) async fn resolve_appeal(ctx: Context<'_>, status: &str, response: String) -> Result<(), Error> {
-    let guild_id = ctx.guild_id().unwrap();
     let channel_id = ctx.channel_id();
 
     let appeal = ctx
@@ -34,124 +33,25 @@ pub(crate) async fn resolve_appeal(ctx: Context<'_>, status: &str, response: Str
         return Err(Error::user("This appeal has already been resolved."));
     }
 
-    ctx.data()
-        .db
-        .resolve_appeal(appeal.id, status, &response, &ctx.author().id.to_string())
-        .await?;
-
-    // Update the appeal card in the appeals channel.
-    if let (Some(card_msg_id), Some(appeals_ch)) = (
-        appeal.card_message_id.as_ref().and_then(|s| s.parse::<u64>().ok()),
-        ctx.data()
-            .db
-            .get_or_create_guild(&guild_id.to_string())
-            .await
-            .ok()
-            .and_then(|g| g.appeals_channel_id)
-            .and_then(|s| s.parse::<u64>().ok()),
-    ) {
-        super::view::mark_appeal_resolved(
-            ctx.serenity_context(),
-            serenity::ChannelId::new(appeals_ch),
-            serenity::MessageId::new(card_msg_id),
-            status,
-            &appeal.user_id,
-            &response,
-            ctx.author().id,
-        )
-        .await;
-    }
-
-    channel_id
-        .edit_thread(ctx, serenity::EditThread::new().archived(true))
-        .await
-        .ok();
-
-    let infraction = ctx.data().db.get_infraction_by_id(appeal.infraction_id).await?;
-    if status == "accepted" {
-        if let Some(inf) = &infraction {
-            let uid = inf.user_id.parse::<u64>().map(serenity::UserId::new).ok();
-            if inf.kind == "ban" {
-                if let Some(uid) = uid {
-                    guild_id.unban(&ctx, uid).await.ok();
-                    ctx.data()
-                        .db
-                        .create_infraction(
-                            &guild_id.to_string(),
-                            &uid.to_string(),
-                            &ctx.author().id.to_string(),
-                            "unban",
-                            &format!("Appeal accepted: {}", response),
-                            None,
-                            false,
-                            None,
-                        )
-                        .await
-                        .ok();
-
-                    let invite_url = make_rejoin_invite(&ctx, guild_id).await;
-                    if let Ok(user) = uid.to_user(&ctx).await {
-                        super::view::notify_appeal_resolved(
-                            &ctx.serenity_context().http,
-                            &user,
-                            status,
-                            &response,
-                            invite_url.as_deref(),
-                        )
-                        .await;
-                    }
-                }
-            } else if let Some(uid) = uid {
-                if let Ok(user) = uid.to_user(&ctx).await {
-                    super::view::notify_appeal_resolved(
-                        &ctx.serenity_context().http,
-                        &user,
-                        status,
-                        &response,
-                        None,
-                    )
-                    .await;
-                }
-            }
-        }
-    } else if let Some(inf) = &infraction {
-        let uid = inf.user_id.parse::<u64>().map(serenity::UserId::new).ok();
-        if let Some(uid) = uid {
-            if let Ok(user) = uid.to_user(&ctx).await {
-                super::view::notify_appeal_denied(
-                    &ctx.serenity_context().http,
-                    &user,
-                    guild_id,
-                    &response,
-                    appeal.id,
-                )
-                .await;
-            }
-        }
-    }
+    let accept = status == "accepted";
+    super::service::resolve(
+        ctx.serenity_context(),
+        &ctx.data(),
+        &appeal,
+        accept,
+        &response,
+        ctx.author().id,
+    )
+    .await?;
 
     ctx.send(
         poise::CreateReply::default().ephemeral(true).embed(
             serenity::CreateEmbed::new()
-                .colour(if status == "accepted" { colours::GREEN } else { colours::RED })
-                .title(if status == "accepted" { "✅ Appeal Accepted" } else { "❌ Appeal Denied" })
+                .colour(if accept { colours::GREEN } else { colours::RED })
+                .title(if accept { "✅ Appeal Accepted" } else { "❌ Appeal Denied" })
                 .description("Response sent to user. Thread archived."),
         ),
     )
     .await?;
     Ok(())
-}
-
-/// Create a one-use, one-week rejoin invite to the first text channel, if any.
-async fn make_rejoin_invite(ctx: &Context<'_>, guild_id: serenity::GuildId) -> Option<String> {
-    let channels = guild_id.channels(ctx).await.ok()?;
-    let channel = channels
-        .into_values()
-        .find(|c| c.kind == serenity::ChannelType::Text)?;
-    let invite = channel
-        .id
-        .create_invite(ctx, serenity::CreateInvite::new().max_uses(1).max_age(604800))
-        .await
-        .ok()?;
-    Some(format!("https://discord.gg/{}", invite.code))
 }

@@ -37,10 +37,24 @@ pub async fn handle(
         respond_ephemeral(ctx, ci, "This report has already been resolved.").await;
         return Ok(());
     }
+    if super::super::acting_on_own_report(ci.user.id, &report) {
+        respond_ephemeral(ctx, ci, super::super::SELF_ACTION_REFUSAL).await;
+        return Ok(());
+    }
     let target_id: u64 = report.target_user_id.parse().unwrap_or(0);
 
-    // "del" is handled inline — no modal needed.
+    // "del" is handled inline — no modal needed. Deleting the message, archiving the
+    // thread, and DMing the reporter can exceed the 3-second window, so acknowledge
+    // first and confirm via follow-up. (The other actions open a modal instead, which
+    // must remain the initial response and therefore can't be deferred.)
     if action == "del" {
+        ci.create_response(
+            &ctx.http,
+            serenity::CreateInteractionResponse::Defer(
+                serenity::CreateInteractionResponseMessage::new().ephemeral(true),
+            ),
+        )
+        .await?;
         if let Some(ref msg_url) = report.message_url {
             let url_parts: Vec<&str> = msg_url.split('/').collect();
             let n = url_parts.len();
@@ -49,7 +63,8 @@ pub async fn handle(
                     (url_parts[n - 2].parse::<u64>(), url_parts[n - 1].parse::<u64>())
                 {
                     serenity::ChannelId::new(ch_id)
-                        .delete_message(ctx, serenity::MessageId::new(m_id))
+                        .widen()
+                        .delete_message(&ctx.http, serenity::MessageId::new(m_id), None)
                         .await
                         .ok();
                 }
@@ -59,89 +74,89 @@ pub async fn handle(
             .resolve_report(report_id, "action_taken", &ci.user.id.to_string())
             .await?;
         ci.channel_id
-            .edit_thread(ctx, serenity::EditThread::new().archived(true))
+            .expect_thread()
+            .edit(&ctx.http, serenity::EditThread::new().archived(true))
             .await
             .ok();
         super::super::view::notify_reporter_action_taken(ctx, &report.reporter_id).await;
-        respond_ephemeral(ctx, ci, "Message deleted. Report resolved and thread archived.").await;
+        ci.create_followup(
+            &ctx.http,
+            serenity::CreateInteractionResponseFollowup::new()
+                .ephemeral(true)
+                .content("Message deleted. Report resolved and thread archived."),
+        )
+        .await
+        .ok();
         return Ok(());
     }
 
     let modal_id = cid_report_action_modal(action, report_id, target_id);
-    let (title, components): (&str, Vec<serenity::CreateActionRow>) = match action {
+    let (title, components): (&str, Vec<serenity::CreateModalComponent>) = match action {
         "warn" | "kick" => (
             if action == "warn" {
                 "⚠️ Warn User"
             } else {
                 "👢 Kick User"
             },
-            vec![serenity::CreateActionRow::InputText(
-                serenity::CreateInputText::new(
-                    serenity::InputTextStyle::Short,
-                    "Reason for action",
-                    "reason",
-                )
-                .placeholder("What rule was violated?")
-                .required(true),
+            vec![crate::util::modal_input(
+                "Reason for action",
+                "reason",
+                false,
+                true,
+                Some("What rule was violated?"),
+                None,
             )],
         ),
         "dw" => (
             "🗑️ Delete & Warn",
-            vec![serenity::CreateActionRow::InputText(
-                serenity::CreateInputText::new(
-                    serenity::InputTextStyle::Short,
-                    "Reason for warning",
-                    "reason",
-                )
-                .placeholder("What was the issue with this message?")
-                .required(true),
+            vec![crate::util::modal_input(
+                "Reason for warning",
+                "reason",
+                false,
+                true,
+                Some("What was the issue with this message?"),
+                None,
             )],
         ),
         "timeout" => (
             "⏱️ Timeout User",
             vec![
-                serenity::CreateActionRow::InputText(
-                    serenity::CreateInputText::new(
-                        serenity::InputTextStyle::Short,
-                        "Reason for timeout",
-                        "reason",
-                    )
-                    .placeholder("What did they do?")
-                    .required(true),
+                crate::util::modal_input(
+                    "Reason for timeout",
+                    "reason",
+                    false,
+                    true,
+                    Some("What did they do?"),
+                    None,
                 ),
-                serenity::CreateActionRow::InputText(
-                    serenity::CreateInputText::new(
-                        serenity::InputTextStyle::Short,
-                        "How long to mute",
-                        "duration",
-                    )
-                    .placeholder("60s / 5min / 10min / 1h / 1d / 1w")
-                    .value("1h")
-                    .required(true),
+                crate::util::modal_input(
+                    "How long to mute",
+                    "duration",
+                    false,
+                    true,
+                    Some("60s / 5min / 10min / 1h / 1d / 1w"),
+                    Some("1h"),
                 ),
             ],
         ),
         "ban" => (
             "🔨 Ban User",
             vec![
-                serenity::CreateActionRow::InputText(
-                    serenity::CreateInputText::new(
-                        serenity::InputTextStyle::Short,
-                        "Reason for ban",
-                        "reason",
-                    )
-                    .placeholder("Be specific about the violation")
-                    .required(true),
+                crate::util::modal_input(
+                    "Reason for ban",
+                    "reason",
+                    false,
+                    true,
+                    Some("Be specific about the violation"),
+                    None,
                 ),
-                serenity::CreateActionRow::InputText(
-                    serenity::CreateInputText::new(
-                        serenity::InputTextStyle::Short,
-                        "Allow appeals (yes/no)",
-                        "appealable",
-                    )
-                    .placeholder("Can they appeal this ban?")
-                    .value("yes")
-                    .required(false),
+                crate::util::modal_input(
+                    "Allow appeals (yes/no)",
+                    "appealable",
+                    false,
+                    false,
+                    Some("Can they appeal this ban?"),
+                    Some("yes"),
                 ),
             ],
         ),
@@ -152,7 +167,7 @@ pub async fn handle(
     };
 
     ci.create_response(
-        ctx,
+        &ctx.http,
         serenity::CreateInteractionResponse::Modal(
             serenity::CreateModal::new(modal_id, title).components(components),
         ),

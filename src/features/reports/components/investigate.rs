@@ -30,6 +30,32 @@ pub async fn handle(
         respond_ephemeral(ctx, ci, "This report has already been resolved.").await;
         return Ok(());
     }
+    if super::super::acting_on_own_report(ci.user.id, &report) {
+        respond_ephemeral(ctx, ci, super::super::SELF_ACTION_REFUSAL).await;
+        return Ok(());
+    }
+    // Already investigated — point to the existing thread rather than make a duplicate.
+    // The thread is private, so add the staff member who clicked (they may not have
+    // opened it) before linking them to it, otherwise they can't see it.
+    if let Some(tid) = report.thread_id.as_deref().and_then(|s| s.parse::<u64>().ok()) {
+        ctx.http
+            .add_thread_channel_member(serenity::ThreadId::new(tid), ci.user.id)
+            .await
+            .ok();
+        respond_ephemeral(ctx, ci, &format!("This report is already being investigated: <#{tid}>")).await;
+        return Ok(());
+    }
+
+    // Creating the thread, forwarding the message, and posting the context cards far
+    // exceeds Discord's 3-second response window, so acknowledge the click first and
+    // send the confirmation as a follow-up.
+    ci.create_response(
+        &ctx.http,
+        serenity::CreateInteractionResponse::Defer(
+            serenity::CreateInteractionResponseMessage::new().ephemeral(true),
+        ),
+    )
+    .await?;
 
     let guild_cfg = data.db.get_or_create_guild(&guild_id.to_string()).await?;
     let reports_ch = guild_cfg
@@ -51,32 +77,39 @@ pub async fn handle(
 
     let thread = reports_ch
         .create_thread(
-            ctx,
-            serenity::CreateThread::new(&thread_name)
+            &ctx.http,
+            serenity::CreateThread::new(thread_name)
                 .kind(serenity::ChannelType::PrivateThread)
                 .auto_archive_duration(serenity::AutoArchiveDuration::OneWeek)
                 .invitable(false),
         )
         .await?;
 
-    data.db
-        .set_report_thread(report_id, &thread.id.to_string())
-        .await?;
+    // If we can't record the thread, delete it so we don't strand an empty private
+    // thread that no card points to (and that would block re-investigation).
+    if let Err(e) = data.db.set_report_thread(report_id, &thread.id.to_string()).await {
+        thread.id.widen().delete(&ctx.http, None).await.ok();
+        return Err(e.into());
+    }
 
     ctx.http
         .add_thread_channel_member(thread.id, ci.user.id)
         .await
         .ok();
 
-    super::super::view::post_investigation_cards(ctx, thread.id, &report).await;
-
-    ci.create_response(
+    super::super::view::post_investigation_cards(
         ctx,
-        serenity::CreateInteractionResponse::Message(
-            serenity::CreateInteractionResponseMessage::new()
-                .ephemeral(true)
-                .content(format!("Investigation thread created: <#{}>", thread.id)),
-        ),
+        data,
+        serenity::ChannelId::new(thread.id.get()),
+        &report,
+    )
+    .await;
+
+    ci.create_followup(
+        &ctx.http,
+        serenity::CreateInteractionResponseFollowup::new()
+            .ephemeral(true)
+            .content(format!("Investigation thread created: <#{}>", thread.id)),
     )
     .await?;
     Ok(())

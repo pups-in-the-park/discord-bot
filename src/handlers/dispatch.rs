@@ -40,7 +40,30 @@ pub async fn component(
 
     if let Some(Err(e)) = handled {
         warn!("Component handler error for '{}': {:?}", ci.data.custom_id, e);
-        crate::util::respond_ephemeral(ctx, ci, "An error occurred. Please try again.").await;
+        // The handler may already have deferred/acknowledged (long-running flows do),
+        // in which case a fresh response is rejected — fall back to a follow-up so the
+        // user never sees a silent failure or a stuck "thinking…" state.
+        let failed = ci
+            .create_response(
+                &ctx.http,
+                serenity::CreateInteractionResponse::Message(
+                    serenity::CreateInteractionResponseMessage::new()
+                        .ephemeral(true)
+                        .content("An error occurred. Please try again."),
+                ),
+            )
+            .await
+            .is_err();
+        if failed {
+            ci.create_followup(
+                &ctx.http,
+                serenity::CreateInteractionResponseFollowup::new()
+                    .ephemeral(true)
+                    .content("An error occurred. Please try again."),
+            )
+            .await
+            .ok();
+        }
     }
 }
 
@@ -57,15 +80,28 @@ pub async fn modal(ctx: &serenity::Context, data: &Arc<BotData>, mi: &serenity::
 
     if let Some(Err(e)) = handled {
         warn!("Modal handler error for '{}': {:?}", mi.data.custom_id, e);
-        mi.create_response(
-            ctx,
-            serenity::CreateInteractionResponse::Message(
-                serenity::CreateInteractionResponseMessage::new()
+        // As with components, the handler may already have deferred — fall back to a
+        // follow-up if a fresh response is rejected.
+        let failed = mi
+            .create_response(
+                &ctx.http,
+                serenity::CreateInteractionResponse::Message(
+                    serenity::CreateInteractionResponseMessage::new()
+                        .ephemeral(true)
+                        .content("An error occurred processing your submission."),
+                ),
+            )
+            .await
+            .is_err();
+        if failed {
+            mi.create_followup(
+                &ctx.http,
+                serenity::CreateInteractionResponseFollowup::new()
                     .ephemeral(true)
                     .content("An error occurred processing your submission."),
-            ),
-        )
-        .await
-        .ok();
+            )
+            .await
+            .ok();
+        }
     }
 }

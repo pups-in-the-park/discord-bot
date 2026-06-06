@@ -3,7 +3,7 @@ use std::sync::Arc;
 use poise::serenity_prelude as serenity;
 
 use crate::context::BotData;
-use crate::features::moderation::service::send_action_dm;
+use crate::features::moderation::service::{send_action_dm, ModActionDm};
 use crate::ids::parse_mod_warn_modal;
 use crate::util::modal_field;
 
@@ -42,15 +42,14 @@ pub async fn handle(
             &ctx.http,
             &target,
             guild_id,
-            "⚠️ Warning",
-            &reason,
+            ModActionDm::Warn { reason: &reason },
             Some((infraction.id, guild_id)),
         )
         .await;
     }
 
     mi.create_response(
-        ctx,
+        &ctx.http,
         serenity::CreateInteractionResponse::Message(
             serenity::CreateInteractionResponseMessage::new()
                 .ephemeral(true)

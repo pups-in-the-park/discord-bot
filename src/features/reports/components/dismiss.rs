@@ -32,6 +32,20 @@ pub async fn handle(
         respond_ephemeral(ctx, ci, "This report has already been resolved.").await;
         return Ok(());
     }
+    if super::super::acting_on_own_report(ci.user.id, &report) {
+        respond_ephemeral(ctx, ci, super::super::SELF_ACTION_REFUSAL).await;
+        return Ok(());
+    }
+
+    // Editing the card, archiving the thread, and DMing the reporter can exceed the
+    // 3-second response window — acknowledge first, confirm via follow-up.
+    ci.create_response(
+        &ctx.http,
+        serenity::CreateInteractionResponse::Defer(
+            serenity::CreateInteractionResponseMessage::new().ephemeral(true),
+        ),
+    )
+    .await?;
 
     data.db
         .resolve_report(report_id, "no_action", &ci.user.id.to_string())
@@ -57,13 +71,21 @@ pub async fn handle(
 
     if from_thread {
         ci.channel_id
-            .edit_thread(ctx, serenity::EditThread::new().archived(true))
+            .expect_thread()
+            .edit(&ctx.http, serenity::EditThread::new().archived(true))
             .await
             .ok();
     }
 
     super::super::view::notify_reporter_no_action(ctx, &report).await;
 
-    respond_ephemeral(ctx, ci, "Report dismissed. Reporter has been notified.").await;
+    ci.create_followup(
+        &ctx.http,
+        serenity::CreateInteractionResponseFollowup::new()
+            .ephemeral(true)
+            .content("Report dismissed. Reporter has been notified."),
+    )
+    .await
+    .ok();
     Ok(())
 }

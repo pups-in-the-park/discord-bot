@@ -111,11 +111,12 @@ pub async fn tag_list(ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-async fn autocomplete_tag(ctx: Context<'_>, partial: &str) -> Vec<serenity::AutocompleteChoice> {
+async fn autocomplete_tag<'a>(ctx: Context<'a>, partial: &'a str) -> serenity::CreateAutocompleteResponse<'a> {
     let Some(guild_id) = ctx.guild_id() else {
-        return vec![];
+        return serenity::CreateAutocompleteResponse::new();
     };
-    ctx.data()
+    let choices: Vec<_> = ctx
+        .data()
         .db
         .get_tag_definitions(&guild_id.to_string())
         .await
@@ -123,10 +124,11 @@ async fn autocomplete_tag(ctx: Context<'_>, partial: &str) -> Vec<serenity::Auto
         .into_iter()
         .filter(|t| t.name.to_lowercase().contains(&partial.to_lowercase()) || partial.is_empty())
         .map(|t| serenity::AutocompleteChoice::new(t.name.clone(), t.name))
-        .collect()
+        .collect();
+    serenity::CreateAutocompleteResponse::new().set_choices(choices)
 }
 
-async fn autocomplete_ticket_tag(ctx: Context<'_>, partial: &str) -> Vec<serenity::AutocompleteChoice> {
+async fn autocomplete_ticket_tag<'a>(ctx: Context<'a>, partial: &'a str) -> serenity::CreateAutocompleteResponse<'a> {
     let ticket = ctx
         .data()
         .db
@@ -139,8 +141,10 @@ async fn autocomplete_ticket_tag(ctx: Context<'_>, partial: &str) -> Vec<serenit
     } else {
         vec![]
     };
-    tags.into_iter()
+    let choices: Vec<_> = tags
+        .into_iter()
         .filter(|t| partial.is_empty() || t.to_lowercase().contains(&partial.to_lowercase()))
         .map(|t| serenity::AutocompleteChoice::new(t.clone(), t))
-        .collect()
+        .collect();
+    serenity::CreateAutocompleteResponse::new().set_choices(choices)
 }

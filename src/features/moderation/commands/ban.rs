@@ -2,7 +2,10 @@ use poise::serenity_prelude as serenity;
 
 use super::DeleteMessages;
 use crate::context::{colours, Context, Error};
-use crate::features::moderation::{service::send_action_dm, view::log_action};
+use crate::features::moderation::{
+    service::{send_action_dm, ModActionDm},
+    view::log_action,
+};
 use crate::permissions::validate_target;
 
 /// Ban a user from the server.
@@ -24,7 +27,7 @@ pub async fn ban(
     let mod_cfg = ctx.data().db.get_or_create_mod_config(&gid).await?;
 
     guild_id
-        .ban_with_reason(&ctx, user.id, (delete_secs / 86400) as u8, &reason)
+        .ban(&ctx.serenity_context().http, user.id, delete_secs as u32, Some(&reason))
         .await
         .map_err(|e| Error::user(format!("Failed to ban user: {}", e)))?;
 
@@ -45,19 +48,26 @@ pub async fn ban(
 
     if mod_cfg.dm_on_ban {
         let appeal_info = if appealable { Some((infraction.id, guild_id)) } else { None };
-        send_action_dm(&ctx.serenity_context().http, &user, guild_id, "🔨 Banned", &reason, appeal_info)
-            .await;
+        send_action_dm(
+            &ctx.serenity_context().http,
+            &user,
+            guild_id,
+            ModActionDm::Ban { reason: &reason },
+            appeal_info,
+        )
+        .await;
     }
 
     log_action(
         ctx.serenity_context(),
-        ctx.data(),
+        &ctx.data(),
         guild_id,
-        "🔨 Member Banned",
+        "ban",
+        Some(infraction.id),
         &user,
         ctx.author(),
         &reason,
-        if appealable { Some("Appealable") } else { Some("Not Appealable") },
+        if appealable { Some("Appealable") } else { Some("Not appealable") },
     )
     .await;
 

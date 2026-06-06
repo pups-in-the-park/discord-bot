@@ -27,20 +27,17 @@ pub async fn handle(
     )
     .map_err(|_| anyhow::anyhow!("Invalid timestamp"))?;
 
-    let until_str = until
-        .to_rfc3339()
-        .ok_or_else(|| anyhow::anyhow!("Failed to format timeout timestamp"))?;
+    let until_str = until.to_rfc3339();
 
     guild_id
         .edit_member(
-            ctx,
+            &ctx.http,
             serenity::UserId::new(target_id),
-            serenity::EditMember::new().disable_communication_until(until_str),
+            serenity::EditMember::new().disable_communication_until(until),
         )
         .await
         .ok();
 
-    let expires_at = until.to_rfc3339();
     data.db
         .create_infraction(
             &guild_id.to_string(),
@@ -50,12 +47,12 @@ pub async fn handle(
             &reason,
             Some(secs),
             true,
-            expires_at.as_deref(),
+            Some(until_str.as_str()),
         )
         .await?;
 
     mi.create_response(
-        ctx,
+        &ctx.http,
         serenity::CreateInteractionResponse::Message(
             serenity::CreateInteractionResponseMessage::new()
                 .ephemeral(true)

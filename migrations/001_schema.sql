@@ -1,5 +1,6 @@
-PRAGMA journal_mode=WAL;
-PRAGMA foreign_keys=ON;
+-- Baseline schema. Connection-level pragmas (WAL journal mode, foreign keys) are
+-- configured on the pool in `Database::new`, not here — they can't run inside the
+-- transaction sqlx wraps each migration in.
 
 -- ── Guild configuration ───────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS guild_config (

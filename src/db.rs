@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool};
 use sqlx::Row;
 use std::str::FromStr;
 
@@ -150,6 +150,7 @@ pub struct BlocklistEntry {
     pub reason: String,
     pub added_by: String,
     pub added_at: String,
+    pub expires_at: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -227,6 +228,7 @@ pub struct Report {
     pub resolved_by: Option<String>,
     pub concern_raised: bool,
     pub created_at: String,
+    pub profile_parts: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -240,6 +242,17 @@ pub struct Concern {
     pub status: String,
     pub reviewed_by: Option<String>,
     pub created_at: String,
+    pub target_moderator_id: Option<String>,
+    pub reviewed_at: Option<String>,
+}
+
+/// Per-moderator concern tally for `/concerns stats`.
+#[derive(Debug, Clone)]
+pub struct ConcernStat {
+    pub moderator_id: Option<String>,
+    pub total: i64,
+    pub denied_appeals: i64,
+    pub dismissed_reports: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -278,21 +291,22 @@ pub struct Database {
 
 impl Database {
     pub async fn new(url: &str) -> Result<Self> {
-        let options = SqliteConnectOptions::from_str(url)?.create_if_missing(true);
+        // Connection-level settings (not schema): WAL for concurrency, foreign keys
+        // on for every connection. These belong here, not in a migration — SQLite
+        // can't switch journal mode inside the transaction sqlx wraps migrations in.
+        let options = SqliteConnectOptions::from_str(url)?
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .foreign_keys(true);
         let pool = SqlitePool::connect_with(options).await?;
         Ok(Self { pool })
     }
 
+    /// Apply any pending migrations from `./migrations` (embedded at compile time).
+    /// sqlx tracks applied versions in `_sqlx_migrations`, so this auto-resolves
+    /// what still needs to run and is safe to call on every startup.
     pub async fn migrate(&self) -> Result<()> {
-        sqlx::query("PRAGMA journal_mode=WAL").execute(&self.pool).await?;
-        sqlx::query("PRAGMA foreign_keys=ON").execute(&self.pool).await?;
-        let sql = include_str!("../migrations/001_schema.sql");
-        for stmt in sql.split(';') {
-            let stmt = stmt.trim();
-            if !stmt.is_empty() {
-                sqlx::query(stmt).execute(&self.pool).await?;
-            }
-        }
+        sqlx::migrate!("./migrations").run(&self.pool).await?;
         tracing::info!("Migrations applied");
         Ok(())
     }
@@ -1134,11 +1148,14 @@ impl Database {
         scope: &str,
         reason: &str,
         added_by: &str,
+        expires_at: Option<&str>,
     ) -> Result<bool> {
+        // REPLACE so re-blocking the same scope updates the reason/expiry.
         let res = sqlx::query(
-            "INSERT OR IGNORE INTO blocklist (guild_id,user_id,scope,reason,added_by) VALUES (?,?,?,?,?)",
+            "INSERT OR REPLACE INTO blocklist (guild_id,user_id,scope,reason,added_by,expires_at)
+             VALUES (?,?,?,?,?,?)",
         )
-        .bind(guild_id).bind(user_id).bind(scope).bind(reason).bind(added_by)
+        .bind(guild_id).bind(user_id).bind(scope).bind(reason).bind(added_by).bind(expires_at)
         .execute(&self.pool).await?;
         Ok(res.rows_affected() > 0)
     }
@@ -1151,29 +1168,49 @@ impl Database {
         Ok(res.rows_affected() > 0)
     }
 
-    pub async fn is_blocklisted(&self, guild_id: &str, user_id: &str, scope: &str) -> Result<bool> {
-        let n: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM blocklist WHERE guild_id=? AND user_id=? AND (scope='global' OR scope=?)",
+    /// The active (non-expired) blocklist entry covering `scope`, if any. A
+    /// `ticket:{name}` scope is also covered by the `tickets` umbrella entry.
+    pub async fn get_active_block(
+        &self,
+        guild_id: &str,
+        user_id: &str,
+        scope: &str,
+    ) -> Result<Option<BlocklistEntry>> {
+        let umbrella = if scope.starts_with("ticket:") { "tickets" } else { scope };
+        let row = sqlx::query(
+            "SELECT guild_id,user_id,scope,reason,added_by,added_at,expires_at FROM blocklist
+             WHERE guild_id=? AND user_id=? AND (scope=? OR scope=?)
+               AND (expires_at IS NULL OR expires_at > datetime('now'))
+             ORDER BY (expires_at IS NULL) DESC, added_at DESC LIMIT 1",
         )
-        .bind(guild_id).bind(user_id).bind(scope)
-        .fetch_one(&self.pool).await?;
-        Ok(n > 0)
+        .bind(guild_id).bind(user_id).bind(scope).bind(umbrella)
+        .fetch_optional(&self.pool).await?;
+        Ok(row.as_ref().map(Self::map_blocklist))
+    }
+
+    pub async fn is_blocklisted(&self, guild_id: &str, user_id: &str, scope: &str) -> Result<bool> {
+        Ok(self.get_active_block(guild_id, user_id, scope).await?.is_some())
     }
 
     pub async fn get_blocklist(&self, guild_id: &str) -> Result<Vec<BlocklistEntry>> {
         let rows = sqlx::query(
-            "SELECT guild_id,user_id,scope,reason,added_by,added_at FROM blocklist
+            "SELECT guild_id,user_id,scope,reason,added_by,added_at,expires_at FROM blocklist
              WHERE guild_id=? ORDER BY added_at DESC",
         )
         .bind(guild_id).fetch_all(&self.pool).await?;
-        Ok(rows.iter().map(|r| BlocklistEntry {
+        Ok(rows.iter().map(Self::map_blocklist).collect())
+    }
+
+    fn map_blocklist(r: &sqlx::sqlite::SqliteRow) -> BlocklistEntry {
+        BlocklistEntry {
             guild_id: r.get("guild_id"),
             user_id: r.get("user_id"),
             scope: r.get("scope"),
             reason: r.get("reason"),
             added_by: r.get("added_by"),
             added_at: r.get("added_at"),
-        }).collect())
+            expires_at: r.get("expires_at"),
+        }
     }
 
     // ── Moderation config ─────────────────────────────────────────────────────
@@ -1359,6 +1396,16 @@ impl Database {
         Ok(row.as_ref().map(Self::map_appeal))
     }
 
+    pub async fn get_appeal_by_id(&self, id: i64) -> Result<Option<Appeal>> {
+        let row = sqlx::query(
+            "SELECT id,guild_id,infraction_id,user_id,thread_id,card_message_id,reason,
+             status,response,responded_by,created_at,responded_at
+             FROM appeals WHERE id=?",
+        )
+        .bind(id).fetch_optional(&self.pool).await?;
+        Ok(row.as_ref().map(Self::map_appeal))
+    }
+
     pub async fn get_appeal_for_infraction(&self, infraction_id: i64) -> Result<Option<Appeal>> {
         let row = sqlx::query(
             "SELECT id,guild_id,infraction_id,user_id,thread_id,card_message_id,reason,
@@ -1401,6 +1448,7 @@ impl Database {
             resolved_by: r.get("resolved_by"),
             concern_raised: r.get::<i64, _>("concern_raised") != 0,
             created_at: r.get("created_at"),
+            profile_parts: r.get("profile_parts"),
         }
     }
 
@@ -1413,15 +1461,16 @@ impl Database {
         message_url: Option<&str>,
         message_content: Option<&str>,
         reason: Option<&str>,
+        profile_parts: Option<&str>,
     ) -> Result<Report> {
         let row = sqlx::query(
-            "INSERT INTO reports (guild_id,reporter_id,target_user_id,message_id,message_url,message_content,reason)
-             VALUES (?,?,?,?,?,?,?)
+            "INSERT INTO reports (guild_id,reporter_id,target_user_id,message_id,message_url,message_content,reason,profile_parts)
+             VALUES (?,?,?,?,?,?,?,?)
              RETURNING id,guild_id,reporter_id,target_user_id,message_id,message_url,message_content,
-                       reason,card_message_id,thread_id,status,resolved_by,concern_raised,created_at",
+                       reason,card_message_id,thread_id,status,resolved_by,concern_raised,created_at,profile_parts",
         )
         .bind(guild_id).bind(reporter_id).bind(target_user_id)
-        .bind(message_id).bind(message_url).bind(message_content).bind(reason)
+        .bind(message_id).bind(message_url).bind(message_content).bind(reason).bind(profile_parts)
         .fetch_one(&self.pool).await?;
         Ok(Self::map_report(&row))
     }
@@ -1473,7 +1522,7 @@ impl Database {
     pub async fn get_report_by_id(&self, id: i64) -> Result<Option<Report>> {
         let row = sqlx::query(
             "SELECT id,guild_id,reporter_id,target_user_id,message_id,message_url,message_content,
-             reason,card_message_id,thread_id,status,resolved_by,concern_raised,created_at
+             reason,card_message_id,thread_id,status,resolved_by,concern_raised,created_at,profile_parts
              FROM reports WHERE id=?",
         )
         .bind(id).fetch_optional(&self.pool).await?;
@@ -1483,7 +1532,7 @@ impl Database {
     pub async fn get_report_by_thread(&self, thread_id: &str) -> Result<Option<Report>> {
         let row = sqlx::query(
             "SELECT id,guild_id,reporter_id,target_user_id,message_id,message_url,message_content,
-             reason,card_message_id,thread_id,status,resolved_by,concern_raised,created_at
+             reason,card_message_id,thread_id,status,resolved_by,concern_raised,created_at,profile_parts
              FROM reports WHERE thread_id=?",
         )
         .bind(thread_id).fetch_optional(&self.pool).await?;
@@ -1503,6 +1552,8 @@ impl Database {
             status: r.get("status"),
             reviewed_by: r.get("reviewed_by"),
             created_at: r.get("created_at"),
+            target_moderator_id: r.get("target_moderator_id"),
+            reviewed_at: r.get("reviewed_at"),
         }
     }
 
@@ -1513,30 +1564,76 @@ impl Database {
         kind: &str,
         source_id: i64,
         reason: &str,
+        target_moderator_id: Option<&str>,
     ) -> Result<Concern> {
         let row = sqlx::query(
-            "INSERT INTO concerns (guild_id,user_id,kind,source_id,reason)
-             VALUES (?,?,?,?,?)
-             RETURNING id,guild_id,user_id,kind,source_id,reason,status,reviewed_by,created_at",
+            "INSERT INTO concerns (guild_id,user_id,kind,source_id,reason,target_moderator_id)
+             VALUES (?,?,?,?,?,?)
+             RETURNING id,guild_id,user_id,kind,source_id,reason,status,reviewed_by,created_at,
+                       target_moderator_id,reviewed_at",
         )
-        .bind(guild_id).bind(user_id).bind(kind).bind(source_id).bind(reason)
+        .bind(guild_id).bind(user_id).bind(kind).bind(source_id).bind(reason).bind(target_moderator_id)
         .fetch_one(&self.pool).await?;
         Ok(Self::map_concern(&row))
     }
 
     pub async fn mark_concern_reviewed(&self, concern_id: i64, reviewed_by: &str) -> Result<()> {
-        sqlx::query("UPDATE concerns SET status='reviewed',reviewed_by=? WHERE id=?")
+        sqlx::query("UPDATE concerns SET status='reviewed',reviewed_by=?,reviewed_at=datetime('now') WHERE id=?")
             .bind(reviewed_by).bind(concern_id).execute(&self.pool).await?;
         Ok(())
     }
 
     pub async fn get_concern_by_id(&self, id: i64) -> Result<Option<Concern>> {
         let row = sqlx::query(
-            "SELECT id,guild_id,user_id,kind,source_id,reason,status,reviewed_by,created_at
+            "SELECT id,guild_id,user_id,kind,source_id,reason,status,reviewed_by,created_at,
+             target_moderator_id,reviewed_at
              FROM concerns WHERE id=?",
         )
         .bind(id).fetch_optional(&self.pool).await?;
         Ok(row.as_ref().map(Self::map_concern))
+    }
+
+    /// Concern counts grouped by the moderator whose decision was challenged,
+    /// most-challenged first.
+    pub async fn concern_stats(&self, guild_id: &str) -> Result<Vec<ConcernStat>> {
+        let rows = sqlx::query(
+            "SELECT target_moderator_id,
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN kind='appeal' THEN 1 ELSE 0 END) AS denied_appeals,
+                    SUM(CASE WHEN kind='report' THEN 1 ELSE 0 END) AS dismissed_reports
+             FROM concerns WHERE guild_id=?
+             GROUP BY target_moderator_id
+             ORDER BY total DESC",
+        )
+        .bind(guild_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|r| ConcernStat {
+                moderator_id: r.get("target_moderator_id"),
+                total: r.get("total"),
+                denied_appeals: r.get("denied_appeals"),
+                dismissed_reports: r.get("dismissed_reports"),
+            })
+            .collect())
+    }
+
+    /// Pending vs reviewed concern counts for a guild.
+    pub async fn concern_status_counts(&self, guild_id: &str) -> Result<(i64, i64)> {
+        let row = sqlx::query(
+            "SELECT
+                SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) AS pending,
+                SUM(CASE WHEN status='reviewed' THEN 1 ELSE 0 END) AS reviewed
+             FROM concerns WHERE guild_id=?",
+        )
+        .bind(guild_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok((
+            row.get::<Option<i64>, _>("pending").unwrap_or(0),
+            row.get::<Option<i64>, _>("reviewed").unwrap_or(0),
+        ))
     }
 
     // ── Raid config ───────────────────────────────────────────────────────────

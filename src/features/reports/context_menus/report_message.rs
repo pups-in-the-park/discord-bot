@@ -6,7 +6,7 @@ use crate::ids::{cid_report_msg_modal, REPORT_REASON_FIELD};
 /// Report this message to the moderation team.
 #[poise::command(context_menu_command = "Report Message", guild_only)]
 pub async fn report_message(ctx: Context<'_>, msg: serenity::Message) -> Result<(), Error> {
-    if msg.author.bot {
+    if msg.author.bot() {
         return Err(Error::user("You can't report a bot's message."));
     }
     if msg.author.id == ctx.author().id {
@@ -16,15 +16,14 @@ pub async fn report_message(ctx: Context<'_>, msg: serenity::Message) -> Result<
     let modal_id = cid_report_msg_modal(msg.id.get(), msg.channel_id.get(), msg.author.id.get());
     crate::util::modal_response(
         ctx,
-        serenity::CreateModal::new(&modal_id, "🚨 Report Message").components(vec![
-            serenity::CreateActionRow::InputText(
-                serenity::CreateInputText::new(
-                    serenity::InputTextStyle::Paragraph,
-                    "Why are you reporting this?",
-                    REPORT_REASON_FIELD,
-                )
-                .required(false)
-                .placeholder("Be specific about what violates the rules…"),
+        serenity::CreateModal::new(modal_id, "🚨 Report Message").components(vec![
+            crate::util::modal_input(
+                "Why are you reporting this?",
+                REPORT_REASON_FIELD,
+                true,
+                false,
+                Some("Be specific about what violates the rules…"),
+                None,
             ),
         ]),
     )

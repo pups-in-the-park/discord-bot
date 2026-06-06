@@ -23,6 +23,6 @@ pub async fn handle(
         execute_close(&ctx.http, data, &ticket, mi.user.id, reason).await?;
     }
 
-    mi.create_response(ctx, serenity::CreateInteractionResponse::Acknowledge).await?;
+    mi.create_response(&ctx.http, serenity::CreateInteractionResponse::Acknowledge).await?;
     Ok(())
 }

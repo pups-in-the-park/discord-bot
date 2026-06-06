@@ -37,7 +37,21 @@ pub async fn handle(
         ephemeral_reply(ctx, mi, "This report has already been resolved.").await?;
         return Ok(());
     }
+    if super::super::acting_on_own_report(mi.user.id, &report) {
+        ephemeral_reply(ctx, mi, super::super::SELF_ACTION_REFUSAL).await?;
+        return Ok(());
+    }
     let reporter_id = report.reporter_id.clone();
+
+    // Applying the action, DMing the target, archiving the thread, and notifying the
+    // reporter exceeds the 3-second window — acknowledge first, confirm via follow-up.
+    mi.create_response(
+        &ctx.http,
+        serenity::CreateInteractionResponse::Defer(
+            serenity::CreateInteractionResponseMessage::new().ephemeral(true),
+        ),
+    )
+    .await?;
 
     match action.as_str() {
         "warn" => {
@@ -61,8 +75,7 @@ pub async fn handle(
                     &ctx.http,
                     &target,
                     guild_id,
-                    "⚠️ Warning",
-                    &reason,
+                    crate::features::moderation::service::ModActionDm::Warn { reason: &reason },
                     Some((infraction.id, guild_id)),
                 )
                 .await;
@@ -77,7 +90,8 @@ pub async fn handle(
                         (url_parts[n - 2].parse::<u64>(), url_parts[n - 1].parse::<u64>())
                     {
                         serenity::ChannelId::new(ch_id)
-                            .delete_message(ctx, serenity::MessageId::new(m_id))
+                            .widen()
+                            .delete_message(&ctx.http, serenity::MessageId::new(m_id), None)
                             .await
                             .ok();
                     }
@@ -103,8 +117,7 @@ pub async fn handle(
                     &ctx.http,
                     &target,
                     guild_id,
-                    "⚠️ Warning (message deleted)",
-                    &reason,
+                    crate::features::moderation::service::ModActionDm::Warn { reason: &reason },
                     Some((infraction.id, guild_id)),
                 )
                 .await;
@@ -117,18 +130,15 @@ pub async fn handle(
                 serenity::Timestamp::now().unix_timestamp() + secs,
             )
             .map_err(|_| anyhow::anyhow!("Invalid timestamp"))?;
-            let until_str = until
-                .to_rfc3339()
-                .ok_or_else(|| anyhow::anyhow!("Failed to format timestamp"))?;
+            let until_str = until.to_rfc3339();
             guild_id
                 .edit_member(
-                    ctx,
+                    &ctx.http,
                     serenity::UserId::new(target_id),
-                    serenity::EditMember::new().disable_communication_until(until_str),
+                    serenity::EditMember::new().disable_communication_until(until),
                 )
                 .await
                 .ok();
-            let expires_at = until.to_rfc3339();
             data.db
                 .create_infraction(
                     &guild_id.to_string(),
@@ -138,13 +148,13 @@ pub async fn handle(
                     &reason,
                     Some(secs),
                     true,
-                    expires_at.as_deref(),
+                    Some(until_str.as_str()),
                 )
                 .await?;
         }
         "kick" => {
             guild_id
-                .kick_with_reason(ctx, serenity::UserId::new(target_id), &reason)
+                .kick(&ctx.http, serenity::UserId::new(target_id), Some(&reason))
                 .await
                 .ok();
             data.db
@@ -165,7 +175,7 @@ pub async fn handle(
                 .map(|s| s.trim().to_lowercase() != "no")
                 .unwrap_or(true);
             guild_id
-                .ban_with_reason(ctx, serenity::UserId::new(target_id), 0, &reason)
+                .ban(&ctx.http, serenity::UserId::new(target_id), 0, Some(&reason))
                 .await
                 .ok();
             let infraction = data
@@ -193,8 +203,7 @@ pub async fn handle(
                     &ctx.http,
                     &target,
                     guild_id,
-                    "🔨 Banned",
-                    &reason,
+                    crate::features::moderation::service::ModActionDm::Ban { reason: &reason },
                     appeal_info,
                 )
                 .await;
@@ -207,20 +216,20 @@ pub async fn handle(
         .resolve_report(report_id, "action_taken", &mi.user.id.to_string())
         .await?;
     mi.channel_id
-        .edit_thread(ctx, serenity::EditThread::new().archived(true))
+        .expect_thread()
+        .edit(&ctx.http, serenity::EditThread::new().archived(true))
         .await
         .ok();
     super::super::view::notify_reporter_action_taken(ctx, &reporter_id).await;
 
-    mi.create_response(
-        ctx,
-        serenity::CreateInteractionResponse::Message(
-            serenity::CreateInteractionResponseMessage::new()
-                .ephemeral(true)
-                .content("Action taken. Report resolved and thread archived."),
-        ),
+    mi.create_followup(
+        &ctx.http,
+        serenity::CreateInteractionResponseFollowup::new()
+            .ephemeral(true)
+            .content("Action taken. Report resolved and thread archived."),
     )
-    .await?;
+    .await
+    .ok();
     Ok(())
 }
 
@@ -231,7 +240,7 @@ async fn ephemeral_reply(
     msg: &str,
 ) -> Result<(), anyhow::Error> {
     mi.create_response(
-        ctx,
+        &ctx.http,
         serenity::CreateInteractionResponse::Message(
             serenity::CreateInteractionResponseMessage::new()
                 .ephemeral(true)

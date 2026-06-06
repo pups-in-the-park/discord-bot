@@ -20,7 +20,7 @@ use crate::db::Database;
 
 // ── Framework error handler ───────────────────────────────────────────────────
 
-async fn on_error(error: poise::FrameworkError<'_, Arc<BotData>, BotError>) {
+async fn on_error(error: poise::FrameworkError<'_, BotData, BotError>) {
     use poise::FrameworkError::*;
     match error {
         Command { error, ctx, .. } => {
@@ -48,18 +48,6 @@ async fn on_error(error: poise::FrameworkError<'_, Arc<BotData>, BotError>) {
                 .ok();
         }
 
-        Setup { error, .. } => {
-            tracing::error!("Framework setup error: {:?}", error);
-        }
-
-        EventHandler { error, event, .. } => {
-            tracing::warn!(
-                "Event handler error ({}): {:?}",
-                event.snake_case_name(),
-                error
-            );
-        }
-
         error => {
             poise::builtins::on_error(error)
                 .await
@@ -68,32 +56,68 @@ async fn on_error(error: poise::FrameworkError<'_, Arc<BotData>, BotError>) {
     }
 }
 
-// ── Combined event + interaction dispatcher ───────────────────────────────────
+// ── Serenity event handler ────────────────────────────────────────────────────
+//
+// poise `serenity-next` removed the `FrameworkOptions::event_handler` hook and the
+// `.setup()` builder step, so non-command events, startup command registration, and
+// manual component/modal dispatch all live in our own `serenity::EventHandler`,
+// registered alongside the poise framework on the client.
 
-async fn event_handler(
-    ctx: &serenity::Context,
-    event: &serenity::FullEvent,
-    _fw: poise::FrameworkContext<'_, Arc<BotData>, BotError>,
-    data: &Arc<BotData>,
-) -> Result<(), BotError> {
-    // Dispatch message / member-join / log stream events.
-    events::handle_event(ctx, event, data).await?;
+struct Handler {
+    data: Arc<BotData>,
+    commands: Vec<poise::Command<BotData, BotError>>,
+    guild_id: serenity::GuildId,
+    started: std::sync::atomic::AtomicBool,
+}
 
-    // Poise handles ApplicationCommand interactions automatically for registered
-    // commands.  We manually dispatch the two interaction types it ignores.
-    if let serenity::FullEvent::InteractionCreate { interaction } = event {
-        match interaction {
-            serenity::Interaction::Component(ci) => {
-                handlers::dispatch::component(ctx, data, ci).await;
+#[serenity::async_trait]
+impl serenity::EventHandler for Handler {
+    async fn dispatch(&self, ctx: &serenity::Context, event: &serenity::FullEvent) {
+        // Message / member-join / ban / log-stream events.
+        if let Err(e) = events::handle_event(ctx, event, &self.data).await {
+            tracing::warn!("Event handler error: {:?}", e);
+        }
+
+        match event {
+            // One-shot startup work (guild command registration + background task).
+            serenity::FullEvent::Ready { data_about_bot, .. } => {
+                if self
+                    .started
+                    .swap(true, std::sync::atomic::Ordering::SeqCst)
+                {
+                    return;
+                }
+                info!(
+                    "Connected as {} ({})",
+                    data_about_bot.user.name, data_about_bot.user.id
+                );
+                info!("Registering commands in guild {}", self.guild_id);
+                if let Err(e) =
+                    poise::builtins::register_in_guild(&ctx.http, &self.commands, self.guild_id)
+                        .await
+                {
+                    tracing::error!("Command registration failed: {:?}", e);
+                } else {
+                    info!("Guild commands registered");
+                }
+                tokio::spawn(auto_close_task(ctx.http.clone(), self.data.clone()));
             }
-            serenity::Interaction::Modal(mi) => {
-                handlers::dispatch::modal(ctx, data, mi).await;
-            }
+
+            // poise handles ApplicationCommand interactions; we dispatch the two
+            // interaction types it ignores.
+            serenity::FullEvent::InteractionCreate { interaction, .. } => match interaction {
+                serenity::Interaction::Component(ci) => {
+                    handlers::dispatch::component(ctx, &self.data, ci).await;
+                }
+                serenity::Interaction::Modal(mi) => {
+                    handlers::dispatch::modal(ctx, &self.data, mi).await;
+                }
+                _ => {}
+            },
+
             _ => {}
         }
     }
-
-    Ok(())
 }
 
 // ── Auto-close background task ────────────────────────────────────────────────
@@ -148,6 +172,12 @@ async fn auto_close_task(http: Arc<serenity::Http>, data: Arc<BotData>) {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // 0. Install a rustls CryptoProvider. serenity-next and sqlx pull in multiple
+    //    rustls backends, so rustls can't pick one automatically.
+    rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .map_err(|_| anyhow::anyhow!("Failed to install rustls crypto provider"))?;
+
     // 1. Load config.toml
     let config = AppConfig::load()?;
 
@@ -167,77 +197,23 @@ async fn main() -> anyhow::Result<()> {
     let bot_data = Arc::new(BotData::new(db, config.clone()));
     let guild_id = serenity::GuildId::new(config.guild.id);
 
-    // 5. Build Poise framework
-    let framework = {
-        let bot_data = bot_data.clone();
-        poise::Framework::builder()
-            .options(poise::FrameworkOptions {
-                commands: vec![
-                    // ── General ──────────────────────────────────────────────
-                    features::general::ping(),
-                    features::general::help(),
-                    // ── Setup ────────────────────────────────────────────────
-                    features::setup::setup(),
-                    // ── Tickets ──────────────────────────────────────────────
-                    features::tickets::ticket(),
-                    // ── Blocklist ────────────────────────────────────────────
-                    features::blocklist::blocklist(),
-                    // ── Moderation ───────────────────────────────────────────
-                    features::moderation::warn(),
-                    features::moderation::timeout(),
-                    features::moderation::untimeout(),
-                    features::moderation::kick(),
-                    features::moderation::ban(),
-                    features::moderation::unban(),
-                    features::moderation::history(),
-                    features::appeals::appeal(),
-                    // ── Roles ─────────────────────────────────────────────────
-                    features::roles::role(),
-                    // ── Reports ──────────────────────────────────────────────
-                    features::reports::report(),
-                    // ── Message context menus ─────────────────────────────────
-                    features::reports::report_message(),
-                    features::tickets::open_ticket_from_message(),
-                    features::moderation::delete_and_warn(),
-                    // ── User context menus ────────────────────────────────────
-                    features::reports::report_user(),
-                    features::moderation::view_history(),
-                    features::moderation::warn_user(),
-                    features::moderation::timeout_user(),
-                    features::moderation::kick_user(),
-                    features::moderation::ban_user(),
-                    features::tickets::open_ticket_with_user(),
-                ],
-                on_error: |error| Box::pin(on_error(error)),
-                event_handler: |ctx, event, fw, data| {
-                    Box::pin(event_handler(ctx, event, fw, data))
-                },
-                ..Default::default()
-            })
-            .setup(move |ctx, ready, framework| {
-                let data = bot_data.clone();
-                let http = ctx.http.clone();
-                Box::pin(async move {
-                    info!("Connected as {} ({})", ready.user.name, ready.user.id);
-                    info!("Registering commands in guild {}", guild_id);
-                    poise::builtins::register_in_guild(
-                        ctx,
-                        &framework.options().commands,
-                        guild_id,
-                    )
-                    .await?;
-                    info!("Guild commands registered");
+    // 5. Build the poise framework (commands only — events/setup are in `Handler`).
+    let framework = poise::Framework::new(poise::FrameworkOptions {
+        commands: commands(),
+        on_error: |error| Box::pin(on_error(error)),
+        ..Default::default()
+    });
 
-                    // Spawn the auto-close background task — http is available now.
-                    tokio::spawn(auto_close_task(http, data.clone()));
-
-                    Ok(data)
-                })
-            })
-            .build()
+    // 6. Our serenity event handler owns a second copy of the command list (used
+    //    once at Ready to register), plus the shared data + guild id.
+    let handler = Handler {
+        data: bot_data.clone(),
+        commands: commands(),
+        guild_id,
+        started: std::sync::atomic::AtomicBool::new(false),
     };
 
-    // 6. Build Serenity client
+    // 7. Build the serenity client: data + event handler + poise framework.
     let intents = serenity::GatewayIntents::GUILDS
         | serenity::GatewayIntents::GUILD_MESSAGES
         | serenity::GatewayIntents::MESSAGE_CONTENT
@@ -245,12 +221,20 @@ async fn main() -> anyhow::Result<()> {
         | serenity::GatewayIntents::GUILD_MODERATION
         | serenity::GatewayIntents::DIRECT_MESSAGES;
 
-    let mut client = serenity::ClientBuilder::new(&config.bot.token, intents)
-        .framework(framework)
+    let token = config
+        .bot
+        .token
+        .parse::<serenity::Token>()
+        .map_err(|e| anyhow::anyhow!("Invalid Discord token: {}", e))?;
+
+    let mut client = serenity::ClientBuilder::new(token, intents)
+        .data(bot_data.clone())
+        .event_handler(Arc::new(handler))
+        .framework(Box::new(framework))
         .await
         .map_err(|e| anyhow::anyhow!("Failed to build Serenity client: {}", e))?;
 
-    // 7. Start the gateway connection
+    // 8. Start the gateway connection
     info!("pip is online — serving guild {}", guild_id);
     client
         .start()
@@ -258,4 +242,47 @@ async fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("Client stopped: {}", e))?;
 
     Ok(())
+}
+
+/// The full application command list. Built fresh on each call so the framework
+/// and the registration step can each own an independent copy.
+fn commands() -> Vec<poise::Command<BotData, BotError>> {
+    vec![
+        // ── General ──────────────────────────────────────────────
+        features::general::ping(),
+        features::general::help(),
+        // ── Setup ────────────────────────────────────────────────
+        features::setup::setup(),
+        // ── Tickets ──────────────────────────────────────────────
+        features::tickets::ticket(),
+        // ── Blocklist ────────────────────────────────────────────
+        features::blocklist::blocklist(),
+        // ── Moderation ───────────────────────────────────────────
+        features::moderation::warn(),
+        features::moderation::timeout(),
+        features::moderation::untimeout(),
+        features::moderation::kick(),
+        features::moderation::ban(),
+        features::moderation::unban(),
+        features::moderation::history(),
+        features::appeals::appeal(),
+        // ── Concerns ─────────────────────────────────────────────
+        features::concerns::concerns(),
+        // ── Roles ─────────────────────────────────────────────────
+        features::roles::role(),
+        // ── Reports ──────────────────────────────────────────────
+        features::reports::report(),
+        // ── Message context menus ─────────────────────────────────
+        features::reports::report_message(),
+        features::tickets::open_ticket_from_message(),
+        features::moderation::delete_and_warn(),
+        // ── User context menus ────────────────────────────────────
+        features::reports::report_user(),
+        features::moderation::view_history(),
+        features::moderation::warn_user(),
+        features::moderation::timeout_user(),
+        features::moderation::kick_user(),
+        features::moderation::ban_user(),
+        features::tickets::open_ticket_with_user(),
+    ]
 }

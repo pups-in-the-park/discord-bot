@@ -170,6 +170,38 @@ pub fn parse_appeal_modal(id: &str) -> Option<(i64, u64)> {
     Some((a.parse().ok()?, b.parse().ok()?))
 }
 
+/// Accept/Deny button on a staff appeal card or thread intro.
+pub fn cid_appeal_resolve(appeal_id: i64, accept: bool) -> String {
+    format!("ap:res:{}:{appeal_id}", if accept { "a" } else { "d" })
+}
+/// → `(appeal_id, accept)`
+pub fn parse_appeal_resolve(id: &str) -> Option<(i64, bool)> {
+    let rest = id.strip_prefix("ap:res:")?;
+    let (a, b) = rest.split_once(':')?;
+    let accept = match a {
+        "a" => true,
+        "d" => false,
+        _ => return None,
+    };
+    Some((b.parse().ok()?, accept))
+}
+
+/// Modal collecting the moderator's response when resolving an appeal via button.
+pub fn cid_appeal_resolve_modal(appeal_id: i64, accept: bool) -> String {
+    format!("m:apr:{}:{appeal_id}", if accept { "a" } else { "d" })
+}
+/// → `(appeal_id, accept)`
+pub fn parse_appeal_resolve_modal(id: &str) -> Option<(i64, bool)> {
+    let rest = id.strip_prefix("m:apr:")?;
+    let (a, b) = rest.split_once(':')?;
+    let accept = match a {
+        "a" => true,
+        "d" => false,
+        _ => return None,
+    };
+    Some((b.parse().ok()?, accept))
+}
+
 // ── Concern IDs ─────────────────────────────────────────────────────────────────
 
 /// "Report a Concern" button; `kind`: "appeal" or "report"; `source_id`: appeal_id or report_id.
@@ -278,7 +310,9 @@ pub const CID_RAID_CLEAR: &str = "raid:clear";
 pub const FORM_FIELD_BASE: &str = "ff_";
 pub const CLOSE_REASON_FIELD: &str = "close_reason";
 pub const REPORT_REASON_FIELD: &str = "report_reason";
+pub const REPORT_PARTS_FIELD: &str = "report_parts";
 pub const APPEAL_REASON_FIELD: &str = "appeal_reason";
+pub const APPEAL_RESPONSE_FIELD: &str = "appeal_response";
 pub const CONCERN_REASON_FIELD: &str = "concern_reason";
 
 // ── Shared multi-arg parsers ────────────────────────────────────────────────────
@@ -315,6 +349,12 @@ mod tests {
         assert_eq!(parse_ctx_open_modal(&cid_ctx_open_modal(7, 99)), Some((7, 99)));
         assert_eq!(parse_appeal_btn(&cid_appeal_btn(3, 50)), Some((3, 50)));
         assert_eq!(parse_appeal_modal(&cid_appeal_modal(3, 50)), Some((3, 50)));
+        assert_eq!(parse_appeal_resolve(&cid_appeal_resolve(9, true)), Some((9, true)));
+        assert_eq!(parse_appeal_resolve(&cid_appeal_resolve(9, false)), Some((9, false)));
+        assert_eq!(
+            parse_appeal_resolve_modal(&cid_appeal_resolve_modal(9, true)),
+            Some((9, true))
+        );
         assert_eq!(parse_mod_warn_modal(&cid_mod_warn_modal(5)), Some(5));
         assert_eq!(
             parse_mod_dw_modal(&cid_mod_dw_modal(1, 2, 3)),

@@ -17,7 +17,7 @@ pub async fn handle(
     let priority = values.first().map(|s| s.as_str()).unwrap_or("normal");
     data.db.set_priority(ticket_id, priority).await?;
 
-    ci.create_response(ctx, serenity::CreateInteractionResponse::Acknowledge)
+    ci.create_response(&ctx.http, serenity::CreateInteractionResponse::Acknowledge)
         .await?;
     Ok(())
 }

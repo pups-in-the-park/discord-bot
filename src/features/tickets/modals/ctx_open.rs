@@ -34,6 +34,15 @@ pub async fn handle(
         .map(serenity::ChannelId::new)
         .ok_or_else(|| anyhow::anyhow!("Ticket channel not configured"))?;
 
+    // Thread creation + card + staff auto-add can exceed the 3-second window.
+    mi.create_response(
+        &ctx.http,
+        serenity::CreateInteractionResponse::Defer(
+            serenity::CreateInteractionResponseMessage::new().ephemeral(true),
+        ),
+    )
+    .await?;
+
     let ticket_number = data.db.next_ticket_number(&guild_id.to_string()).await?;
     let owner_id = serenity::UserId::new(target_user_id);
     open_thread(
@@ -54,13 +63,11 @@ pub async fn handle(
     )
     .await?;
 
-    mi.create_response(
-        ctx,
-        serenity::CreateInteractionResponse::Message(
-            serenity::CreateInteractionResponseMessage::new()
-                .ephemeral(true)
-                .content(format!("Ticket opened for <@{}>.", target_user_id)),
-        ),
+    mi.create_followup(
+        &ctx.http,
+        serenity::CreateInteractionResponseFollowup::new()
+            .ephemeral(true)
+            .content(format!("Ticket opened for <@{}>.", target_user_id)),
     )
     .await?;
     Ok(())

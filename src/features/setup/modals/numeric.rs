@@ -65,6 +65,6 @@ pub async fn handle(
     }
 
     // Fallback acknowledgement for any unmatched setup modal (shouldn't be reached).
-    mi.create_response(ctx, serenity::CreateInteractionResponse::Acknowledge).await?;
+    mi.create_response(&ctx.http, serenity::CreateInteractionResponse::Acknowledge).await?;
     Ok(())
 }

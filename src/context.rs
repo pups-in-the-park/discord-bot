@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 
-use std::sync::Arc;
 use crate::config::AppConfig;
 use crate::db::Database;
 use crate::features::raid::RaidState;
@@ -35,7 +34,11 @@ impl BotData {
     }
 }
 
-pub type Context<'a> = poise::Context<'a, Arc<BotData>, BotError>;
+// serenity `next` stores client data as `Arc<D>` and poise's `Context::data()`
+// returns `Arc<U>`, so the user-data type `U` is `BotData` (not `Arc<BotData>`).
+// `ctx.data()` therefore yields an owned `Arc<BotData>`; helpers that want a
+// borrow take `&ctx.data()`.
+pub type Context<'a> = poise::Context<'a, BotData, BotError>;
 pub type Error = BotError;
 
 // ── Colour constants ──────────────────────────────────────────────────────────

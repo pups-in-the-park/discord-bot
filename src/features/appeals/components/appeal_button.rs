@@ -28,6 +28,19 @@ pub async fn handle(
         return Ok(());
     }
 
+    // An `appeals` block bars appealing other infractions — but never the blocklist
+    // entry itself, so a user blocked from appeals can still contest the block.
+    if infraction.kind != "blocklist" {
+        if let Some(block) = data
+            .db
+            .get_active_block(&guild_id.to_string(), &ci.user.id.to_string(), "appeals")
+            .await?
+        {
+            respond_ephemeral(ctx, ci, &crate::features::blocklist::view::blocked_text(&block)).await;
+            return Ok(());
+        }
+    }
+
     if data.db.get_appeal_for_infraction(infraction_id).await?.is_some() {
         respond_ephemeral(ctx, ci, "You have already submitted an appeal for this action.").await;
         return Ok(());
@@ -57,19 +70,16 @@ pub async fn handle(
 
     let modal_id = cid_appeal_modal(infraction_id, guild_id.get());
     ci.create_response(
-        ctx,
+        &ctx.http,
         serenity::CreateInteractionResponse::Modal(
-            serenity::CreateModal::new(&modal_id, "📄 Appeal Decision").components(vec![
-                serenity::CreateActionRow::InputText(
-                    serenity::CreateInputText::new(
-                        serenity::InputTextStyle::Paragraph,
-                        "Why should we reconsider?",
-                        APPEAL_REASON_FIELD,
-                    )
-                    .required(true)
-                    .placeholder(
-                        "Explain your perspective and why you believe this action was unfair…",
-                    ),
+            serenity::CreateModal::new(modal_id, "📄 Appeal Decision").components(vec![
+                crate::util::modal_input(
+                    "Why should we reconsider?",
+                    APPEAL_REASON_FIELD,
+                    true,
+                    true,
+                    Some("Explain your perspective and why you believe this action was unfair…"),
+                    None,
                 ),
             ]),
         ),

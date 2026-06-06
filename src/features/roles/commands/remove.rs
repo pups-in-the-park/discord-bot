@@ -15,7 +15,7 @@ pub async fn remove(
         .member(&ctx, user.id)
         .await
         .map_err(|_| Error::user("User is not in this server."))?
-        .remove_role(&ctx, role.id)
+        .remove_role(&ctx.serenity_context().http, role.id, None)
         .await
         .map_err(|e| Error::user(format!("Failed to remove role: {}", e)))?;
 

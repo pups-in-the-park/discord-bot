@@ -96,7 +96,7 @@ fn expand(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
         specs.push(parse_field(field)?);
     }
 
-    // ── into_modal body: one Action-Row text input per field ───────────────────
+    // ── into_modal body: one Label-wrapped text input per field (modal v2) ──────
     let row_exprs = specs.iter().map(|f| {
         let id = &f.custom_id;
         let label = &f.label;
@@ -125,16 +125,15 @@ fn expand(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
             None => quote! {},
         };
         quote! {
-            crate::ui::action_row(vec![
+            crate::ui::Label::new(
+                #label,
                 crate::ui::TextInput::new(#id, #style)
-                    .label(#label)
                     .required(#required)
                     #placeholder
                     #min
                     #max
-                    #value
-                    .into()
-            ])
+                    #value,
+            )
         }
     });
 
@@ -181,9 +180,9 @@ fn expand(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
                 Self::from_components(&mi.data.components)
             }
 
-            /// Core parse: read field values out of submitted Action-Row components.
+            /// Core parse: read field values out of submitted modal components.
             pub fn from_components(
-                __components: &[::poise::serenity_prelude::ActionRow],
+                __components: &[::poise::serenity_prelude::ModalComponent],
             ) -> ::anyhow::Result<Self> {
                 Ok(Self {
                     #( #read_exprs, )*

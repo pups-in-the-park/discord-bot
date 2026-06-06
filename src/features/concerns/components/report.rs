@@ -13,17 +13,16 @@ pub async fn handle(
 ) -> Result<(), anyhow::Error> {
     let modal_id = cid_concern_modal(&kind, source_id, guild_id);
     ci.create_response(
-        ctx,
+        &ctx.http,
         serenity::CreateInteractionResponse::Modal(
-            serenity::CreateModal::new(&modal_id, "⚠️ Report a Concern").components(vec![
-                serenity::CreateActionRow::InputText(
-                    serenity::CreateInputText::new(
-                        serenity::InputTextStyle::Paragraph,
-                        "Describe your concern",
-                        CONCERN_REASON_FIELD,
-                    )
-                    .required(true)
-                    .placeholder("Be detailed about why you think this decision was unfair…"),
+            serenity::CreateModal::new(modal_id, "⚠️ Report a Concern").components(vec![
+                crate::util::modal_input(
+                    "Describe your concern",
+                    CONCERN_REASON_FIELD,
+                    true,
+                    true,
+                    Some("Be detailed about why you think this decision was unfair…"),
+                    None,
                 ),
             ]),
         ),
