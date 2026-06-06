@@ -22,7 +22,8 @@ pub use component::{
 };
 pub use modal::{Label, Modal, TextInput, TextInputStyle};
 pub use respond::{
-    edit, forward_message, open_modal, respond_ephemeral, send, slash_respond, update,
+    edit, forward_message, open_modal, respond_ephemeral, respond_ephemeral_to, send,
+    slash_respond, update,
 };
 pub use select::{
     ChannelSelect, ChannelType, MentionableSelect, RoleSelect, SelectOption, StringSelect,

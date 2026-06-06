@@ -145,9 +145,9 @@ fn cv2modal_into_modal_emits_db_defaults() {
     assert_eq!(input(&rows[0])["style"], 1); // short
 
     assert_eq!(input(&rows[1])["value"], "🎫");
-    assert!(input(&rows[1]).get("required").is_none()); // Option → optional (false skipped)
+    assert_eq!(input(&rows[1])["required"], false); // Option → optional, sent explicitly
 
-    assert!(input(&rows[2]).get("required").is_none()); // explicit required=false override
+    assert_eq!(input(&rows[2])["required"], false); // explicit required=false override, sent explicitly
 
     // None optional → no `value` key, paragraph style.
     assert!(input(&rows[3]).get("value").is_none());

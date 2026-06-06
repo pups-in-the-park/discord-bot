@@ -7,7 +7,7 @@
 use serde::Serialize;
 
 use super::component::Component;
-use super::{is_false, Type};
+use super::Type;
 
 /// A modal interaction-response payload. `components` are top-level modal items —
 /// usually [`Label`]s wrapping an input/select, or bare text displays.
@@ -124,7 +124,9 @@ pub struct TextInput {
     min_length: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_length: Option<u16>,
-    #[serde(skip_serializing_if = "is_false")]
+    // Always serialized: Discord defaults `required` to `true` when omitted, so an
+    // optional field (`required = false`) must send the flag explicitly or it renders
+    // as required.
     required: bool,
 }
 

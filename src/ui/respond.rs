@@ -69,6 +69,23 @@ pub async fn respond_ephemeral(
     Ok(())
 }
 
+/// Respond to any interaction (by id+token) with a new ephemeral CV2 message
+/// (type 4). Use for modal submissions that have no source message to update — e.g.
+/// a modal opened from a slash command.
+pub async fn respond_ephemeral_to(
+    http: &serenity::Http,
+    interaction_id: serenity::InteractionId,
+    token: &str,
+    components: &[Component],
+) -> Result<()> {
+    let body = serde_json::json!({
+        "type": 4,
+        "data": { "flags": 64u64 | CV2_FLAG, "components": components_json(components) },
+    });
+    http.create_interaction_response(interaction_id, token, &body, vec![]).await?;
+    Ok(())
+}
+
 /// Update the message an interaction lives on in-place (type 7 UPDATE_MESSAGE).
 /// Works for both component and modal interactions — pass `id`/`token` from either.
 pub async fn update(
