@@ -89,6 +89,23 @@ Guidance:
 - **There is no footer/timestamp chrome.** If a CV2 card needs a timestamp, write
   a Discord `<t:unix:R>` markdown timestamp into a `ui::text` line.
 
+### Hubs & status dashboards
+
+Multi-step admin areas use a **hub**: an ephemeral CV2 card that lists what exists
+(a `StringSelect` to pick one to configure) plus a Create button, and re-renders in
+place (`ui::update`) as you drill in and back out. `/setup overview`, `/ticket category
+manage`, and `/ticket panel manage` are the references. Conventions:
+
+- A **status dashboard** (`/setup overview`) is a hub-of-hubs: one `Section` per area
+  with a ✅/⚠️ status line and a quick-link **button** accessory that opens that area.
+  Surface the one setting that blocks everything (the ticket channel) explicitly.
+- **Open vs back vs drill-in.** A button launched from *another* card opens the hub as
+  a **new** ephemeral (`ui::respond_ephemeral`); a Back/select button *inside* the hub
+  updates **in place** (`ui::update`). Give them separate custom ids (e.g. `…:open`
+  vs `…:back`) so they don't fight over which behaviour applies.
+- Keep a card under ~38 components (Discord's limit is 40) — fold related controls
+  into one form rather than spreading across several.
+
 ### Data entry on CV2 surfaces
 
 A CV2 card is the persistent display of state; how a value is *edited* depends on

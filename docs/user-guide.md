@@ -104,9 +104,12 @@ Tickets are **auto-closed after a period of inactivity** — pip checks every 30
 
 ### Appeals
 
-Inside an appeal thread, use:
-- `/appeal accept <response>` — accept the appeal, notify the user, unban if applicable
-- `/appeal deny <response>` — deny the appeal, notify the user with a "Report a Concern" option
+When a member appeals, a card with **Accept** / **Deny** buttons is posted to the
+appeals channel and to the private review thread. Staff resolve the appeal by
+clicking either button, which opens a short modal to enter the response sent to the
+member:
+- **Accept** — accept the appeal, notify the user, unban if applicable.
+- **Deny** — deny the appeal, notify the user with a "Report a Concern" option.
 
 After resolving, the appeal card in the appeals channel is updated and the thread is archived automatically.
 
@@ -162,31 +165,62 @@ Both systems are configured via `/setup raid` and `/setup slowmode`.
 
 ### Initial Setup
 
-Use the `/setup` command group to configure everything. All settings are per-guild.
+**Start with `/setup overview`.** It opens a dashboard showing every configuration
+area with a ✅ (ready) or ⚠️ (needs attention) marker, and a button to jump straight
+into each one — you never have to memorise command names. The dashboard also flags the
+**ticket channel**, which the ticket system can't work without.
 
-| Subcommand | What it configures |
+All settings are per-guild and save immediately when you change them in the form.
+
+| Area (button on the dashboard) | What it configures |
 |---|---|
-| `/setup logs` | Log channels: fallback, moderation, and chat logs |
-| `/setup tickets` | Ticket parent channel and reports channel |
-| `/setup mod` | Mod staff roles and DM notification toggles (warn/timeout/kick/ban) |
-| `/setup appeals` | Appeals channel, concerns channel, and appeal cooldown period |
-| `/setup raid` | Raid detection sensitivity (Low / Medium / High) and slowmode strength |
-| `/setup slowmode` | Auto-slowmode enable/disable, message rate window, excluded channels |
-
-Settings are saved immediately when you change them in the interactive form.
+| **Ticket channel** (`/setup tickets`) | Where ticket threads are created, and the reports channel — **required for tickets** |
+| **Categories** (`/ticket category manage`) | The ticket types members can open |
+| **Panels** (`/ticket panel manage`) | The messages members click to open a ticket |
+| **Mod staff** (`/setup mod`) | Mod staff roles and DM notification toggles (warn/timeout/kick/ban) |
+| **Appeals & concerns** (`/setup appeals`) | Appeals channel, concerns channel, and the appeal waiting period |
+| **Anti-raid** (`/setup raid`) | Raid detection sensitivity (Low / Medium / High) and slowmode strength |
+| **Auto-slowmode** (`/setup slowmode`) | Auto-slowmode enable/disable, message-rate thresholds |
+| **Log channels** (`/setup logs`) | Fallback, moderation, chat, and ticket logs |
 
 ---
 
-### Ticket Panels & Categories
+### Ticket Categories
 
-**Categories** define the types of tickets users can open (e.g. "Support", "Ban Appeal", "Partnership"). Managed via `/ticket category` subcommands (create, configure, delete).
+Run **`/ticket category manage`** (or the **Categories** button on the dashboard) to
+open the category hub:
 
-**Panels** are the interactive messages posted in a channel that members use to open tickets. Workflow:
+- **Create Category** — a short two-step wizard: step 1 captures the name, emoji, and
+  description; step 2 (a single modal with a colour **dropdown** and behaviour
+  **checkboxes**) sets the accent colour, welcome message, thread-name pattern, and
+  toggles. You can skip step 2 and tweak everything later.
+- **Pick a category** from the dropdown to configure it. The form holds everything in
+  one place: basic info (label, emoji, colour, description), the welcome message,
+  thread-name pattern, ping roles, staff-alert channel, behaviour toggles, limits
+  (max open per user — set **0 for unlimited** — and auto-close), the **intake-form
+  questions**, and a **Delete** button (with confirmation).
 
-1. `/ticket panel create` — create a panel with a title, description, colour, and layout (Buttons or Select Menu)
-2. `/ticket panel publish` — post the panel to a channel, optionally limiting it to specific categories
-3. `/ticket panel configure` — edit an existing panel's appearance
-4. `/ticket panel list` — see all panels and whether they're published
-5. `/ticket panel delete` — remove a panel
+**Intake form questions** (up to 5) support four types, chosen with a dropdown when you
+add one:
+
+- **Short answer** / **Paragraph** — free text.
+- **Dropdown** — the member picks one of your choices.
+- **Checkboxes** — the member picks any number of your choices.
+
+Adding a dropdown/checkbox question is a two-step flow: first the label, type, and
+whether it's required; then a second step to list the choices (one per line).
+
+### Ticket Panels
+
+Run **`/ticket panel manage`** (or the **Panels** button on the dashboard) to open the
+panel hub:
+
+1. **Create Panel** — give it a title (description and colour optional).
+2. In the panel's form: edit basics, choose the **layout** (buttons up to 5, or a
+   dropdown for any number), and tick which **categories** appear using the
+   multi-select.
+3. **Publish** by selecting a channel — pip posts the panel there. Changing categories
+   or basics afterwards updates the live message automatically. Re-publishing to the
+   same channel edits the existing message in place.
 
 Tags for categorising tickets are managed via `/ticket tag list` (requires Manage Guild).
