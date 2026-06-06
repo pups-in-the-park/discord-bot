@@ -3,7 +3,7 @@ use std::sync::Arc;
 use poise::serenity_prelude as serenity;
 
 use crate::context::BotData;
-use crate::util::modal_field;
+use crate::util::modal_secs;
 
 use super::refresh_category_form;
 
@@ -22,17 +22,13 @@ pub async fn handle(
 
     match action {
         "max_open" => {
-            let max: i64 = modal_field(&mi.data.components, "max_open")
-                .and_then(|s| s.trim().parse().ok())
-                .unwrap_or(1)
-                .max(1);
+            // 0 = unlimited.
+            let max: i64 = modal_secs(&mi.data.components, "max_open").unwrap_or(1).max(0);
             data.db.set_ticket_type_max_open(type_id, max).await?;
         }
         "auto_close" => {
-            // 0 or blank = disabled (None)
-            let hours: Option<i64> = modal_field(&mi.data.components, "auto_close")
-                .and_then(|s| s.trim().parse::<i64>().ok())
-                .filter(|&h| h > 0);
+            // 0 = disabled (stored as None).
+            let hours: Option<i64> = modal_secs(&mi.data.components, "auto_close").filter(|&h| h > 0);
             data.db.set_ticket_type_auto_close(type_id, hours).await?;
         }
         _ => {}

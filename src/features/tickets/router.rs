@@ -10,7 +10,8 @@ use crate::context::{BotData, CID_CLOSE_BTN, CID_PANEL_SELECT};
 use crate::ids;
 
 use super::components::{
-    category_config, claim_button, close_button, panel_interaction, priority_select,
+    category_config, category_hub, claim_button, close_button, panel_config, panel_hub,
+    panel_interaction, priority_select,
 };
 use super::modals;
 
@@ -37,6 +38,15 @@ pub async fn route_component(
     if id.starts_with("cat:cfg:") {
         return Some(category_config::handle(ctx, data, ci).await);
     }
+    if id.starts_with("cat:hub") {
+        return Some(category_hub::handle(ctx, data, ci).await);
+    }
+    if id.starts_with("pnl:hub") {
+        return Some(panel_hub::handle(ctx, data, ci).await);
+    }
+    if id.starts_with("pnl:cfg:") {
+        return Some(panel_config::handle(ctx, data, ci).await);
+    }
     None
 }
 
@@ -62,12 +72,20 @@ pub async fn route_modal(
         modals::category_thread::handle(ctx, data, mi).await
     } else if id.starts_with("m:cat:num:") {
         modals::category_num::handle(ctx, data, mi).await
+    } else if id.starts_with("m:cat:create2:") {
+        modals::category_create2::handle(ctx, data, mi).await
     } else if id.starts_with("m:cat:create") {
         modals::category_create::handle(ctx, data, mi).await
     } else if id.starts_with("m:cat:edit:") {
         modals::category_edit::handle(ctx, data, mi).await
-    } else if id.starts_with("m:ff:add:") {
-        modals::form_field_add::handle(ctx, data, mi).await
+    } else if id.starts_with("m:ff:type:") {
+        modals::form_field_type::handle(ctx, data, mi).await
+    } else if id.starts_with("m:ff:opts:") {
+        modals::form_field_options::handle(ctx, data, mi).await
+    } else if id == "m:pnl:create" {
+        modals::panel_create::handle(ctx, data, mi).await
+    } else if id.starts_with("m:pnl:basics:") {
+        modals::panel_basics::handle(ctx, data, mi).await
     } else {
         return None;
     };

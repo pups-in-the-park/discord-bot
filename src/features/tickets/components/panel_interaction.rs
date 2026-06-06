@@ -54,7 +54,8 @@ pub async fn handle(
         .db
         .count_open_tickets_for_user(&guild_id.to_string(), &ci.user.id.to_string(), ticket_type_id)
         .await?;
-    if open_count >= ticket_type.max_open_per_user {
+    // max_open_per_user of 0 means unlimited.
+    if ticket_type.max_open_per_user > 0 && open_count >= ticket_type.max_open_per_user {
         respond_ephemeral(
             ctx,
             ci,
@@ -79,12 +80,25 @@ pub async fn handle(
             .await?;
 
         let guild_cfg = data.db.get_or_create_guild(&guild_id.to_string()).await?;
-        let parent_ch = guild_cfg
+        let Some(parent_ch) = guild_cfg
             .ticket_channel_id
             .as_ref()
             .and_then(|s| s.parse::<u64>().ok())
             .map(serenity::ChannelId::new)
-            .ok_or_else(|| anyhow::anyhow!("Ticket channel not configured"))?;
+        else {
+            ctx.http
+                .create_followup_message(
+                    &ci.token,
+                    &serde_json::json!({
+                        "content": "This server's ticket system isn't finished being set up yet. An admin needs to pick a ticket channel in `/setup overview`.",
+                        "flags": 64,
+                    }),
+                    vec![],
+                )
+                .await
+                .ok();
+            return Ok(());
+        };
 
         let ticket_number = data.db.next_ticket_number(&guild_id.to_string()).await?;
         let opened = open_thread(

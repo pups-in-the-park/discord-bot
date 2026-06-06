@@ -22,7 +22,9 @@ pub async fn help(ctx: Context<'_>) -> Result<(), Error> {
                     **Appeals**\n\
                     Check your DMs for action notifications — they include appeal buttons.\n\n\
                     **Admin**\n\
-                    `/setup` — Configure bot settings\n\
+                    `/setup overview` — Setup dashboard: what's configured & what's left\n\
+                    `/ticket category manage` — Create & configure ticket categories\n\
+                    `/ticket panel manage` — Build & publish ticket panels\n\
                     `/blocklist` — Manage the ticket blocklist",
                 ),
         ),

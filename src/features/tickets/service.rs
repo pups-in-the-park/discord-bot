@@ -232,11 +232,15 @@ pub async fn open_thread(
                 .map(|r| format!("<@&{}>", r))
                 .collect::<Vec<_>>()
                 .join(" ");
-            let alert = Container::new(vec![ui::text(format!(
-                "**🎫 New {} Ticket**\nTicket **#{:04}** opened by <@{}>\nThread: <#{}>",
-                opts.ticket_type.label, opts.ticket_number, opts.owner_id, thread.id
-            ))])
-            .accent(colours::BLURPLE.0);
+            // Read-only staff notice → embed. The thread reference stays a channel
+            // mention (a markdown link), not a link button.
+            let alert = serenity::CreateEmbed::new()
+                .colour(colours::BLURPLE)
+                .title(format!("🎫 New {} Ticket", opts.ticket_type.label))
+                .description(format!(
+                    "Ticket **#{:04}** opened by <@{}>\nThread: <#{}>",
+                    opts.ticket_number, opts.owner_id, thread.id
+                ));
             let ch = serenity::ChannelId::new(cid);
             if !mentions.is_empty() {
                 ch.widen()
@@ -244,7 +248,10 @@ pub async fn open_thread(
                     .await
                     .ok();
             }
-            ui::send(&ctx.http, ch, &[alert.into()]).await.ok();
+            ch.widen()
+                .send_message(&ctx.http, serenity::CreateMessage::new().embed(alert))
+                .await
+                .ok();
         } else {
             warn!(
                 "Invalid staff alert channel id on ticket type {}: {}",
@@ -275,14 +282,20 @@ pub async fn execute_close(
 
     let thread_id = ticket.thread_id.parse::<u64>().map(serenity::ChannelId::new)?;
 
-    let close_card = Container::new(vec![ui::text(format!(
-        "**🔒 Ticket Closed**\nClosed by <@{}>{}",
-        closed_by,
-        reason.map(|r| format!("\n**Reason:** {}", r)).unwrap_or_default(),
-    ))])
-    .accent(colours::RED.0);
-
-    ui::send(http, thread_id, &[close_card.into()]).await.ok();
+    // Read-only "closed" notice → embed.
+    let close_embed = serenity::CreateEmbed::new()
+        .colour(colours::RED)
+        .title("🔒 Ticket Closed")
+        .description(format!(
+            "Closed by <@{}>{}",
+            closed_by,
+            reason.map(|r| format!("\n**Reason:** {}", r)).unwrap_or_default(),
+        ));
+    thread_id
+        .widen()
+        .send_message(http, serenity::CreateMessage::new().embed(close_embed))
+        .await
+        .ok();
 
     serenity::ThreadId::new(thread_id.get())
         .edit(http, serenity::EditThread::new().archived(true).locked(true))
@@ -303,26 +316,27 @@ pub async fn execute_close(
                 ticket.guild_id, ticket.parent_channel_id, ticket.thread_id
             );
 
-            let mut lines = vec![
-                format!("**📋 Ticket #{:04} Closed**", ticket.ticket_number),
-                format!(
-                    "Category: {} · Priority: {} {}",
-                    type_label,
-                    priority.emoji(),
-                    priority.label()
-                ),
-                format!("Owner: <@{}> · Closed by: <@{}>", ticket.owner_id, closed_by),
-                format!("Reason: {}", reason.unwrap_or("No reason given")),
-                format!("Opened: {}", ticket.created_at),
-            ];
+            // Ticket log entry → embed (logs are the canonical read-only surface).
+            // Scalars go in fields; the "View Thread" markdown link is the body.
+            let mut log_embed = serenity::CreateEmbed::new()
+                .colour(colours::GREY)
+                .title(format!("📋 Ticket #{:04} Closed", ticket.ticket_number))
+                .field("Category", type_label, true)
+                .field("Priority", format!("{} {}", priority.emoji(), priority.label()), true)
+                .field("Owner", format!("<@{}>", ticket.owner_id), true)
+                .field("Closed by", format!("<@{}>", closed_by), true)
+                .field("Reason", reason.unwrap_or("No reason given"), false)
+                .field("Opened", ticket.created_at.to_string(), true)
+                .description(format!("[View Thread]({})", thread_url));
             if !tags.is_empty() {
-                lines.push(format!("Tags: {}", tags.join(", ")));
+                log_embed = log_embed.field("Tags", tags.join(", "), true);
             }
-            lines.push(format!("[View Thread]({})", thread_url));
 
-            let log_card = Container::new(vec![ui::text(lines.join("\n"))]).accent(colours::GREY.0);
-
-            ui::send(http, serenity::ChannelId::new(cid), &[log_card.into()]).await.ok();
+            serenity::ChannelId::new(cid)
+                .widen()
+                .send_message(http, serenity::CreateMessage::new().embed(log_embed))
+                .await
+                .ok();
         }
     }
 
@@ -330,6 +344,7 @@ pub async fn execute_close(
 }
 
 /// Read intake-form responses out of a submitted modal, keyed by field label.
+/// Handles every question type: text inputs, dropdowns, and checkbox groups.
 pub fn collect_form_responses(
     components: &[serenity::ModalComponent],
     fields: &[crate::db::FormField],
@@ -337,8 +352,21 @@ pub fn collect_form_responses(
     let mut map = serde_json::Map::new();
     for field in fields {
         let cid = format!("ff_{}", field.id);
-        if let Some(val) = modal_field(components, &cid) {
-            map.insert(field.label.clone(), serde_json::Value::String(val.to_string()));
+        let value = match field.style.as_str() {
+            "select" => {
+                let picked = crate::ui::read_multi_select(components, &cid);
+                (!picked.is_empty()).then(|| picked.join(", "))
+            }
+            "checkbox" => {
+                let picked = crate::ui::read_checkbox_group(components, &cid);
+                (!picked.is_empty()).then(|| picked.join(", "))
+            }
+            _ => modal_field(components, &cid).map(str::to_string),
+        };
+        if let Some(val) = value {
+            if !val.is_empty() {
+                map.insert(field.label.clone(), serde_json::Value::String(val));
+            }
         }
     }
     map

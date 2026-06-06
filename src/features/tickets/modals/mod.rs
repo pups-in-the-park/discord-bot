@@ -3,14 +3,18 @@
 
 pub mod category_basic;
 pub mod category_create;
+pub mod category_create2;
 pub mod category_edit;
 pub mod category_num;
 pub mod category_thread;
 pub mod category_welcome;
 pub mod close;
 pub mod ctx_open;
-pub mod form_field_add;
+pub mod form_field_options;
+pub mod form_field_type;
 pub mod open;
+pub mod panel_basics;
+pub mod panel_create;
 
 use std::sync::Arc;
 
@@ -35,5 +39,6 @@ pub(crate) async fn refresh_category_form(
         .await?
         .ok_or_else(|| anyhow::anyhow!("Category not found"))?;
     let roles = data.db.get_type_roles(type_id).await?;
-    ui::update(&ctx.http, mi.id, &mi.token, &build_category_config_form(&cat, &roles)).await
+    let fields = data.db.get_form_fields(type_id).await?;
+    ui::update(&ctx.http, mi.id, &mi.token, &build_category_config_form(&cat, &roles, &fields)).await
 }

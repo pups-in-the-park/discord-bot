@@ -61,11 +61,29 @@ pub struct FormField {
     pub ticket_type_id: i64,
     pub label: String,
     pub placeholder: Option<String>,
+    /// Question type: `short`, `paragraph`, `select` (dropdown), or `checkbox`.
     pub style: String,
     pub required: bool,
     pub min_length: Option<i64>,
     pub max_length: Option<i64>,
     pub position: i64,
+    /// Choices for `select`/`checkbox` fields, stored as a JSON array of strings.
+    pub options: Option<String>,
+}
+
+impl FormField {
+    /// Parse the `options` JSON into a vec (empty for text fields or unset).
+    pub fn options_vec(&self) -> Vec<String> {
+        self.options
+            .as_ref()
+            .and_then(|j| serde_json::from_str(j).ok())
+            .unwrap_or_default()
+    }
+
+    /// Whether this field type requires options to be usable.
+    pub fn needs_options(&self) -> bool {
+        matches!(self.style.as_str(), "select" | "checkbox")
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -647,6 +665,7 @@ impl Database {
 
     // ── Form fields ───────────────────────────────────────────────────────────
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn add_form_field(
         &self,
         type_id: i64,
@@ -656,6 +675,7 @@ impl Database {
         required: bool,
         min_length: Option<i64>,
         max_length: Option<i64>,
+        options: Option<&str>,
     ) -> Result<FormField> {
         let pos: i64 = sqlx::query_scalar(
             "SELECT COALESCE(MAX(position)+1,0) FROM form_fields WHERE ticket_type_id=?",
@@ -665,34 +685,19 @@ impl Database {
         .await?;
 
         let row = sqlx::query(
-            "INSERT INTO form_fields (ticket_type_id,label,placeholder,style,required,min_length,max_length,position)
-             VALUES (?,?,?,?,?,?,?,?)
-             RETURNING id,ticket_type_id,label,placeholder,style,required,min_length,max_length,position",
+            "INSERT INTO form_fields (ticket_type_id,label,placeholder,style,required,min_length,max_length,position,options)
+             VALUES (?,?,?,?,?,?,?,?,?)
+             RETURNING id,ticket_type_id,label,placeholder,style,required,min_length,max_length,position,options",
         )
         .bind(type_id).bind(label).bind(placeholder).bind(style)
-        .bind(required as i64).bind(min_length).bind(max_length).bind(pos)
+        .bind(required as i64).bind(min_length).bind(max_length).bind(pos).bind(options)
         .fetch_one(&self.pool).await?;
 
-        Ok(FormField {
-            id: row.get("id"),
-            ticket_type_id: row.get("ticket_type_id"),
-            label: row.get("label"),
-            placeholder: row.get("placeholder"),
-            style: row.get("style"),
-            required: row.get::<i64, _>("required") != 0,
-            min_length: row.get("min_length"),
-            max_length: row.get("max_length"),
-            position: row.get("position"),
-        })
+        Ok(Self::map_form_field(&row))
     }
 
-    pub async fn get_form_fields(&self, type_id: i64) -> Result<Vec<FormField>> {
-        let rows = sqlx::query(
-            "SELECT id,ticket_type_id,label,placeholder,style,required,min_length,max_length,position
-             FROM form_fields WHERE ticket_type_id=? ORDER BY position ASC",
-        )
-        .bind(type_id).fetch_all(&self.pool).await?;
-        Ok(rows.iter().map(|r| FormField {
+    fn map_form_field(r: &sqlx::sqlite::SqliteRow) -> FormField {
+        FormField {
             id: r.get("id"),
             ticket_type_id: r.get("ticket_type_id"),
             label: r.get("label"),
@@ -702,7 +707,39 @@ impl Database {
             min_length: r.get("min_length"),
             max_length: r.get("max_length"),
             position: r.get("position"),
-        }).collect())
+            options: r.get("options"),
+        }
+    }
+
+    pub async fn get_form_fields(&self, type_id: i64) -> Result<Vec<FormField>> {
+        let rows = sqlx::query(
+            "SELECT id,ticket_type_id,label,placeholder,style,required,min_length,max_length,position,options
+             FROM form_fields WHERE ticket_type_id=? ORDER BY position ASC",
+        )
+        .bind(type_id).fetch_all(&self.pool).await?;
+        Ok(rows.iter().map(Self::map_form_field).collect())
+    }
+
+    pub async fn get_form_field(&self, field_id: i64) -> Result<Option<FormField>> {
+        let row = sqlx::query(
+            "SELECT id,ticket_type_id,label,placeholder,style,required,min_length,max_length,position,options
+             FROM form_fields WHERE id=?",
+        )
+        .bind(field_id).fetch_optional(&self.pool).await?;
+        Ok(row.as_ref().map(Self::map_form_field))
+    }
+
+    /// Set a field's options (JSON array) and placeholder, used by the question wizard.
+    pub async fn set_form_field_options(
+        &self,
+        field_id: i64,
+        options: Option<&str>,
+        placeholder: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query("UPDATE form_fields SET options=?, placeholder=? WHERE id=?")
+            .bind(options).bind(placeholder).bind(field_id)
+            .execute(&self.pool).await?;
+        Ok(())
     }
 
     pub async fn remove_form_field(&self, type_id: i64, field_id: i64) -> Result<bool> {

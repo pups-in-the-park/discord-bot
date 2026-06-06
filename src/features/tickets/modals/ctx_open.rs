@@ -28,11 +28,22 @@ pub async fn handle(
     let fields = data.db.get_form_fields(ticket_type_id).await?;
     let responses = collect_form_responses(&mi.data.components, &fields);
     let guild_cfg = data.db.get_or_create_guild(&guild_id.to_string()).await?;
-    let parent_ch = guild_cfg
+    let Some(parent_ch) = guild_cfg
         .ticket_channel_id
         .and_then(|s| s.parse::<u64>().ok())
         .map(serenity::ChannelId::new)
-        .ok_or_else(|| anyhow::anyhow!("Ticket channel not configured"))?;
+    else {
+        mi.create_response(
+            &ctx.http,
+            serenity::CreateInteractionResponse::Message(
+                serenity::CreateInteractionResponseMessage::new()
+                    .ephemeral(true)
+                    .content("No ticket channel is set yet. Configure one in `/setup overview` → Ticket channel before opening tickets."),
+            ),
+        )
+        .await?;
+        return Ok(());
+    };
 
     // Thread creation + card + staff auto-add can exceed the 3-second window.
     mi.create_response(

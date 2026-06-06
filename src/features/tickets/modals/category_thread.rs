@@ -3,7 +3,7 @@ use std::sync::Arc;
 use poise::serenity_prelude as serenity;
 
 use crate::context::BotData;
-use crate::util::modal_field;
+use crate::util::{modal_field, validate_thread_pattern};
 
 use super::refresh_category_form;
 
@@ -24,7 +24,21 @@ pub async fn handle(
     let pattern = modal_field(&mi.data.components, "pattern")
         .filter(|s| !s.is_empty())
         .unwrap_or("ticket-{number}-{username}")
+        .trim()
         .to_string();
+
+    if let Err(msg) = validate_thread_pattern(&pattern) {
+        mi.create_response(
+            &ctx.http,
+            serenity::CreateInteractionResponse::Message(
+                serenity::CreateInteractionResponseMessage::new()
+                    .ephemeral(true)
+                    .content(format!("{} Nothing was changed.", msg)),
+            ),
+        )
+        .await?;
+        return Ok(());
+    }
 
     data.db.set_ticket_type_thread_pattern(type_id, &pattern).await?;
     refresh_category_form(ctx, data, mi, type_id).await?;

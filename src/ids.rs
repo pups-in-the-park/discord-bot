@@ -86,17 +86,69 @@ pub fn parse_close_modal(id: &str) -> Option<i64> {
     tail_i64(id, "m:close:")
 }
 
-pub fn cid_form_field_add_modal(type_id: i64, style: &str, required: bool) -> String {
-    format!("m:ff:add:{type_id}:{style}:{required}")
+/// Step 1 of the add-question wizard: capture label + type + required.
+pub fn cid_form_field_type_modal(type_id: i64) -> String {
+    format!("m:ff:type:{type_id}")
 }
-/// → `(type_id, style, required)`
-pub fn parse_form_field_add_modal(id: &str) -> Option<(i64, String, bool)> {
-    let rest = id.strip_prefix("m:ff:add:")?;
-    let mut parts = rest.splitn(3, ':');
-    let type_id = parts.next()?.parse().ok()?;
-    let style = parts.next()?.to_string();
-    let required = parts.next()?.parse().ok()?;
-    Some((type_id, style, required))
+pub fn parse_form_field_type_modal(id: &str) -> Option<i64> {
+    tail_i64(id, "m:ff:type:")
+}
+
+/// Step 2 of the add-question wizard (select/checkbox only): capture the choices
+/// for an already-created field.
+pub fn cid_form_field_options_modal(field_id: i64) -> String {
+    format!("m:ff:opts:{field_id}")
+}
+pub fn parse_form_field_options_modal(id: &str) -> Option<i64> {
+    tail_i64(id, "m:ff:opts:")
+}
+
+/// Step 2 of the category-creation wizard: appearance & behaviour for a new category.
+pub fn cid_category_step2_modal(cat_id: i64) -> String {
+    format!("m:cat:create2:{cat_id}")
+}
+pub fn parse_category_step2_modal(id: &str) -> Option<i64> {
+    tail_i64(id, "m:cat:create2:")
+}
+
+// ── Category management hub IDs ──────────────────────────────────────────────────
+// The hub is a CV2 surface listing categories (select to configure) plus a Create
+// button. `OPEN` is fired from a fresh surface (e.g. the setup hub quick-link) and
+// responds with a new ephemeral; `BACK`/`SELECT`/`CREATE` live inside the hub
+// ephemeral and update it in place.
+
+pub const CID_CAT_HUB_OPEN: &str = "cat:hub:open";
+pub const CID_CAT_HUB_BACK: &str = "cat:hub:back";
+pub const CID_CAT_HUB_CREATE: &str = "cat:hub:create";
+pub const CID_CAT_HUB_SELECT: &str = "cat:hub:sel";
+
+// ── Panel management hub / config IDs ────────────────────────────────────────────
+
+pub const CID_PANEL_HUB_OPEN: &str = "pnl:hub:open";
+pub const CID_PANEL_HUB_BACK: &str = "pnl:hub:back";
+pub const CID_PANEL_HUB_CREATE: &str = "pnl:hub:create";
+pub const CID_PANEL_HUB_SELECT: &str = "pnl:hub:sel";
+
+/// Modal that creates a new panel.
+pub const CID_PANEL_CREATE_MODAL: &str = "m:pnl:create";
+
+/// Modal that edits a panel's title / description / colour.
+pub fn cid_panel_basics_modal(panel_id: i64) -> String {
+    format!("m:pnl:basics:{panel_id}")
+}
+pub fn parse_panel_basics_modal(id: &str) -> Option<i64> {
+    tail_i64(id, "m:pnl:basics:")
+}
+
+/// A control inside the panel-configure form: `pnl:cfg:{panel_id}:{field}`.
+pub fn cid_panel_cfg(panel_id: i64, field: &str) -> String {
+    format!("pnl:cfg:{panel_id}:{field}")
+}
+/// → `(panel_id, field)` for a `pnl:cfg:{id}:{field}` control.
+pub fn parse_panel_cfg(id: &str) -> Option<(i64, String)> {
+    let rest = id.strip_prefix("pnl:cfg:")?;
+    let (a, b) = rest.split_once(':')?;
+    Some((a.parse().ok()?, b.to_string()))
 }
 
 // ── Setup IDs ───────────────────────────────────────────────────────────────────
@@ -372,9 +424,13 @@ mod tests {
             parse_concern_modal(&cid_concern_modal("report", 8, 60)),
             Some(("report".to_string(), 8, 60))
         );
+        assert_eq!(parse_form_field_type_modal(&cid_form_field_type_modal(4)), Some(4));
+        assert_eq!(parse_form_field_options_modal(&cid_form_field_options_modal(9)), Some(9));
+        assert_eq!(parse_category_step2_modal(&cid_category_step2_modal(3)), Some(3));
+        assert_eq!(parse_panel_basics_modal(&cid_panel_basics_modal(12)), Some(12));
         assert_eq!(
-            parse_form_field_add_modal(&cid_form_field_add_modal(4, "short", true)),
-            Some((4, "short".to_string(), true))
+            parse_panel_cfg(&cid_panel_cfg(8, "cats")),
+            Some((8, "cats".to_string()))
         );
     }
 
