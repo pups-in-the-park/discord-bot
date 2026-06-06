@@ -33,6 +33,16 @@ pub async fn handle(
         return Ok(());
     }
 
+    // Creating the appeal, opening the review thread, and posting two cards far
+    // exceeds Discord's 3-second window — acknowledge first, confirm via follow-up.
+    mi.create_response(
+        &ctx.http,
+        serenity::CreateInteractionResponse::Defer(
+            serenity::CreateInteractionResponseMessage::new().ephemeral(true),
+        ),
+    )
+    .await?;
+
     let appeal = data
         .db
         .create_appeal(&guild_id.to_string(), infraction_id, &mi.user.id.to_string(), &reason)
@@ -59,23 +69,41 @@ pub async fn handle(
             )
             .await?;
 
-        let card_msg = super::super::view::post_appeal_card(
+        let thread_ch = serenity::ChannelId::new(thread.id.get());
+
+        // Post the staff card (which links the thread + carries Accept/Deny buttons).
+        // If anything here fails, delete the freshly-made thread so we don't strand an
+        // empty private thread that no card points to.
+        let card_msg = match super::super::view::post_appeal_card(
             ctx,
             appeals_ch,
             &appeal,
             &infraction,
             mi.user.id,
             &reason,
+            thread_ch,
         )
-        .await?;
+        .await
+        {
+            Ok(msg) => msg,
+            Err(e) => {
+                thread.id.widen().delete(&ctx.http, None).await.ok();
+                return Err(e);
+            }
+        };
 
-        data.db
+        if let Err(e) = data
+            .db
             .set_appeal_thread(appeal.id, &thread.id.to_string(), &card_msg.id.to_string())
-            .await?;
+            .await
+        {
+            thread.id.widen().delete(&ctx.http, None).await.ok();
+            return Err(e.into());
+        }
 
         super::super::view::post_appeal_thread_intro(
             ctx,
-            serenity::ChannelId::new(thread.id.get()),
+            thread_ch,
             &appeal,
             &infraction,
             mi.user.id,
@@ -84,14 +112,12 @@ pub async fn handle(
         .await;
     }
 
-    mi.create_response(
+    mi.create_followup(
         &ctx.http,
-        serenity::CreateInteractionResponse::Message(
-            serenity::CreateInteractionResponseMessage::new().ephemeral(true).content(format!(
-                "Your appeal has been submitted and will be reviewed. Reference: `#appeal-{}`.",
-                appeal.id
-            )),
-        ),
+        serenity::CreateInteractionResponseFollowup::new().ephemeral(true).content(format!(
+            "Your appeal has been submitted and will be reviewed. Reference: `#appeal-{}`.",
+            appeal.id
+        )),
     )
     .await?;
     Ok(())
