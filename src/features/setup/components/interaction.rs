@@ -3,8 +3,44 @@ use std::sync::Arc;
 use poise::serenity_prelude as serenity;
 
 use crate::context::BotData;
-use crate::ui::{self, Modal, TextInputStyle};
+use crate::ui;
 use crate::util::respond_ephemeral;
+
+/// Wait-before-appeal presets, in days (`0` = appeal immediately).
+const APPEAL_COOLDOWN_PRESETS: &[(&str, i64)] = &[
+    ("No wait", 0),
+    ("1 day", 1),
+    ("3 days", 3),
+    ("7 days", 7),
+    ("14 days", 14),
+    ("30 days", 30),
+];
+/// Raid slowmode duration presets, in seconds.
+const RAID_SLOWMODE_PRESETS: &[(&str, i64)] = &[
+    ("5 seconds", 5),
+    ("10 seconds", 10),
+    ("15 seconds", 15),
+    ("30 seconds", 30),
+    ("60 seconds", 60),
+    ("5 minutes", 300),
+];
+/// Auto-slowmode window presets, in seconds.
+const SLOWMODE_WINDOW_PRESETS: &[(&str, i64)] = &[
+    ("5 seconds", 5),
+    ("10 seconds", 10),
+    ("15 seconds", 15),
+    ("30 seconds", 30),
+    ("60 seconds", 60),
+];
+/// Auto-slowmode message-count presets.
+const SLOWMODE_CAPACITY_PRESETS: &[(&str, i64)] = &[
+    ("5 messages", 5),
+    ("10 messages", 10),
+    ("15 messages", 15),
+    ("20 messages", 20),
+    ("30 messages", 30),
+    ("50 messages", 50),
+];
 
 use super::super::view::{
     build_setup_appeals_form, build_setup_log_form, build_setup_mod_form, build_setup_raid_form,
@@ -127,48 +163,44 @@ pub async fn handle(
         // ── "Open text modal" buttons for numeric fields ─────────────────────
         "setup:num:appeal_cooldown" => {
             let cfg = data.db.get_or_create_mod_config(&g).await?;
-            let modal = Modal::new("m:setup:appeal_cooldown", "⏳ Appeal Cooldown").text_row(
-                "appeal_cooldown",
-                "Days between appeals",
-                TextInputStyle::Short,
-                "e.g. 7",
-                true,
-                Some(&cfg.appeal_cooldown_days.to_string()),
-            );
-            ui::open_modal(&ctx.http, ci, &modal).await?;
+            let modal = serenity::CreateModal::new("m:setup:appeal_cooldown", "⏳ Appeal Cooldown")
+                .components(vec![crate::util::preset_select(
+                    "Wait before a member can appeal",
+                    "appeal_cooldown",
+                    APPEAL_COOLDOWN_PRESETS,
+                    cfg.appeal_cooldown_days,
+                )]);
+            ci.create_response(&ctx.http, serenity::CreateInteractionResponse::Modal(modal)).await?;
         }
         "setup:num:raid_slowmode" => {
             let cfg = data.db.get_or_create_raid_config(&g).await?;
-            let modal = Modal::new("m:setup:raid_slowmode", "⏱️ Raid Slowmode Duration").text_row(
-                "raid_slowmode",
-                "Slowmode duration (seconds)",
-                TextInputStyle::Short,
-                "e.g. 30",
-                true,
-                Some(&cfg.slowmode_secs.to_string()),
-            );
-            ui::open_modal(&ctx.http, ci, &modal).await?;
+            let modal = serenity::CreateModal::new("m:setup:raid_slowmode", "⏱️ Raid Slowmode Duration")
+                .components(vec![crate::util::preset_select(
+                    "Slowmode applied during a raid",
+                    "raid_slowmode",
+                    RAID_SLOWMODE_PRESETS,
+                    cfg.slowmode_secs,
+                )]);
+            ci.create_response(&ctx.http, serenity::CreateInteractionResponse::Modal(modal)).await?;
         }
         "setup:num:slowmode_config" => {
             let cfg = data.db.get_or_create_slowmode_config(&g).await?;
-            let modal = Modal::new("m:setup:slowmode_config", "⏱️ Auto-Slowmode Thresholds")
-                .text_row(
-                    "slowmode_window",
-                    "Check window (seconds)",
-                    TextInputStyle::Short,
-                    "Messages in this window trigger slowmode (e.g. 10)",
-                    true,
-                    Some(&cfg.window_secs.to_string()),
-                )
-                .text_row(
-                    "slowmode_capacity",
-                    "Message threshold",
-                    TextInputStyle::Short,
-                    "Number of messages before slowmode kicks in (e.g. 20)",
-                    true,
-                    Some(&cfg.capacity.to_string()),
-                );
-            ui::open_modal(&ctx.http, ci, &modal).await?;
+            let modal = serenity::CreateModal::new("m:setup:slowmode_config", "⏱️ Auto-Slowmode Thresholds")
+                .components(vec![
+                    crate::util::preset_select(
+                        "Time window to watch",
+                        "slowmode_window",
+                        SLOWMODE_WINDOW_PRESETS,
+                        cfg.window_secs,
+                    ),
+                    crate::util::preset_select(
+                        "Messages before slowmode kicks in",
+                        "slowmode_capacity",
+                        SLOWMODE_CAPACITY_PRESETS,
+                        cfg.capacity,
+                    ),
+                ]);
+            ci.create_response(&ctx.http, serenity::CreateInteractionResponse::Modal(modal)).await?;
         }
 
         // ── Raid sensitivity dropdown ─────────────────────────────────────────

@@ -2,12 +2,126 @@
 //! values so selections are visible when the form opens. Selects/toggles save
 //! immediately (see `components`); numeric fields open a small modal.
 
-use crate::context::colours;
+use crate::context::{
+    colours, CID_CAT_HUB_OPEN, CID_PANEL_HUB_OPEN, CID_SETUP_APPEALS, CID_SETUP_LOG_CHANNELS,
+    CID_SETUP_MOD_STAFF, CID_SETUP_RAID, CID_SETUP_SLOWMODE, CID_SETUP_TICKET,
+};
 use crate::db::{GuildConfig, ModConfig, RaidConfig, SlowmodeConfig};
 use crate::ui::{
     self, Button, ButtonStyle, ChannelSelect, ChannelType, Component, Container, RoleSelect,
-    SelectOption, Spacing, StringSelect,
+    Section, SelectOption, Spacing, StringSelect,
 };
+
+/// Map a raid `join_threshold` to its human sensitivity label (mirror of the
+/// presets the raid form writes).
+fn raid_sensitivity_label(join_threshold: f64) -> &'static str {
+    if join_threshold >= 7.0 {
+        "Low"
+    } else if join_threshold <= 4.0 {
+        "High"
+    } else {
+        "Medium"
+    }
+}
+
+/// The `/setup overview` dashboard: one status line per configuration area with a
+/// quick-link button into it. ✅ = ready, ⚠️ = needs attention. The buttons reuse the
+/// existing section ids (`section_button::handle` opens each form) plus the category
+/// and panel hub openers.
+pub fn build_setup_hub(
+    guild: &GuildConfig,
+    modc: &ModConfig,
+    raid: &RaidConfig,
+    slow: &SlowmodeConfig,
+    num_categories: usize,
+    num_published_panels: usize,
+    num_panels: usize,
+) -> Vec<Component> {
+    // A status row: text on the left, a quick-link button on the right.
+    let row = |body: String, btn_id: &str, btn_label: &str, style: ButtonStyle| -> Component {
+        Section::new(vec![ui::text(body)], Button::new(btn_id, btn_label, style).into()).into()
+    };
+
+    let tick = |ok: bool| if ok { "✅" } else { "⚠️" };
+
+    // Tickets: parent channel is the make-or-break setting.
+    let parent_set = guild.ticket_channel_id.is_some();
+    let parent_body = match &guild.ticket_channel_id {
+        Some(id) => format!("**📂 Ticket channel** ✅ · threads open in <#{}>", id),
+        None => "**📂 Ticket channel** ⚠️ · not set — **tickets can't open until this is set**".to_string(),
+    };
+    let parent_style = if parent_set { ButtonStyle::Secondary } else { ButtonStyle::Primary };
+
+    let cats_body = format!(
+        "**🗂️ Categories** {} · {} defined",
+        tick(num_categories > 0),
+        num_categories
+    );
+    let panels_body = format!(
+        "**📋 Panels** {} · {} published of {}",
+        tick(num_published_panels > 0),
+        num_published_panels,
+        num_panels
+    );
+
+    // Moderation & safety.
+    let staff_n = modc.staff_roles().len();
+    let staff_body = if staff_n > 0 {
+        format!("**👮 Mod staff** ✅ · {} role(s) can moderate", staff_n)
+    } else {
+        "**👮 Mod staff** ⚠️ · Administrators only".to_string()
+    };
+    let appeals_ok = guild.appeals_channel_id.is_some();
+    let appeals_body = format!(
+        "**📨 Appeals & concerns** {} · appeals {} · concerns {}",
+        tick(appeals_ok),
+        if guild.appeals_channel_id.is_some() { "set" } else { "unset" },
+        if guild.concerns_channel_id.is_some() { "set" } else { "unset" },
+    );
+    let raid_body = format!(
+        "**🛡️ Anti-raid** ✅ · sensitivity **{}**",
+        raid_sensitivity_label(raid.join_threshold)
+    );
+    let slow_body = format!(
+        "**⏱️ Auto-slowmode** {} · {}",
+        if slow.enabled { "✅" } else { "▫️" },
+        if slow.enabled { "on" } else { "off" }
+    );
+
+    // Logging.
+    let logs_set = [
+        &guild.log_channel_id,
+        &guild.mod_log_channel_id,
+        &guild.chat_log_channel_id,
+        &guild.ticket_log_channel_id,
+    ]
+    .iter()
+    .filter(|c| c.is_some())
+    .count();
+    let logs_body = format!("**📋 Log channels** {} · {} of 4 set", tick(logs_set > 0), logs_set);
+
+    vec![Container::new(vec![
+        ui::text(
+            "## 🛠️ Server Setup\n-# Configure pip for your server. ✅ ready · ⚠️ needs attention. Use the buttons to jump into each area.",
+        ),
+        ui::separator(true, Spacing::Small),
+        ui::text("### 🎫 Ticket system\n-# Set these up in order."),
+        row(parent_body, CID_SETUP_TICKET, if parent_set { "Edit" } else { "Set up" }, parent_style),
+        row(cats_body, CID_CAT_HUB_OPEN, "Manage", ButtonStyle::Secondary),
+        row(panels_body, CID_PANEL_HUB_OPEN, "Manage", ButtonStyle::Secondary),
+        ui::separator(false, Spacing::Small),
+        ui::text("### 🛡️ Moderation & safety"),
+        row(staff_body, CID_SETUP_MOD_STAFF, "Configure", ButtonStyle::Secondary),
+        row(appeals_body, CID_SETUP_APPEALS, "Configure", ButtonStyle::Secondary),
+        row(raid_body, CID_SETUP_RAID, "Configure", ButtonStyle::Secondary),
+        row(slow_body, CID_SETUP_SLOWMODE, "Configure", ButtonStyle::Secondary),
+        ui::separator(false, Spacing::Small),
+        ui::text("### 📋 Logging"),
+        row(logs_body, CID_SETUP_LOG_CHANNELS, "Configure", ButtonStyle::Secondary),
+    ])
+    .accent(colours::BLURPLE.0)
+    .into()]
+}
 
 /// Channel types accepted by most setup channel pickers: text, announcement, private thread.
 const TEXT_CHANNELS: &[ChannelType] =
@@ -28,7 +142,7 @@ fn edit_button(custom_id: &str, label: &str) -> Component {
 
 pub fn build_setup_log_form(cfg: &GuildConfig) -> Vec<Component> {
     vec![Container::new(vec![
-        ui::text("**📋 Log Channels**\nSelect where each log type is posted. Leave empty to disable that log."),
+        ui::text("## 📋 Log Channels\n-# Select where each log type is posted. Leave empty to disable that log."),
         ui::separator(false, Spacing::Small),
         ui::text("**📍 Fallback Log** · All logs go here when no specific channel is set."),
         ui::action_row(vec![channel_pick("setup:log:fallback", cfg.log_channel_id.as_deref())]),
@@ -48,7 +162,7 @@ pub fn build_setup_ticket_form(cfg: &GuildConfig) -> Vec<Component> {
         .placeholder("Select a channel…")
         .default(cfg.ticket_channel_id.as_deref());
     vec![Container::new(vec![
-        ui::text("**🎫 Ticket Settings**\nConfigure where ticket threads are created and where reports appear."),
+        ui::text("## 🎫 Ticket Settings\n-# Configure where ticket threads are created and where reports appear."),
         ui::separator(false, Spacing::Small),
         ui::text("**📂 Ticket Parent Channel** · New ticket threads are created inside this channel."),
         ui::action_row(vec![parent.into()]),
@@ -74,7 +188,7 @@ pub fn build_setup_mod_form(cfg: &ModConfig) -> Vec<Component> {
         .max_values(10)
         .defaults(staff_roles.iter().cloned());
     vec![Container::new(vec![
-        ui::text("**⚖️ Moderation Staff**\nSelect which roles have mod access. Leave empty to restrict to Administrators only."),
+        ui::text("## ⚖️ Moderation Staff\n-# Select which roles have mod access. Leave empty to restrict to Administrators only."),
         ui::separator(false, Spacing::Small),
         ui::text("**👮 Staff Roles**"),
         ui::action_row(vec![staff_select.into()]),
@@ -93,7 +207,7 @@ pub fn build_setup_mod_form(cfg: &ModConfig) -> Vec<Component> {
 
 pub fn build_setup_appeals_form(guild_cfg: &GuildConfig, cooldown_days: i64) -> Vec<Component> {
     vec![Container::new(vec![
-        ui::text("**📢 Appeals & Concerns**"),
+        ui::text("## 📢 Appeals & Concerns\n-# Where banned/timed-out members appeal, and where staff review concerns."),
         ui::separator(false, Spacing::Small),
         ui::text("**📨 Appeals Channel** · Where ban/timeout appeal threads are created."),
         ui::action_row(vec![channel_pick("setup:appeals:ch", guild_cfg.appeals_channel_id.as_deref())]),
@@ -118,14 +232,14 @@ pub fn build_setup_raid_form(raid_cfg: &RaidConfig) -> Vec<Component> {
     let select = StringSelect::new(
         "setup:raid:sensitivity",
         vec![
-            SelectOption::new("low", "Low").description("Higher threshold — fewer false positives").default(sensitivity == "low"),
-            SelectOption::new("medium", "Medium").description("Balanced detection (recommended default)").default(sensitivity == "medium"),
-            SelectOption::new("high", "High").description("Lower threshold — triggers more easily").default(sensitivity == "high"),
+            SelectOption::new("low", "Low").description("Only a large burst of joins triggers it").default(sensitivity == "low"),
+            SelectOption::new("medium", "Medium").description("Balanced — recommended for most servers").default(sensitivity == "medium"),
+            SelectOption::new("high", "High").description("Even a small spike of joins triggers it").default(sensitivity == "high"),
         ],
     )
     .placeholder("Select sensitivity…");
     vec![Container::new(vec![
-        ui::text("**🛡️ Anti-Raid Protection**\nAutomatic protection against coordinated join attacks."),
+        ui::text("## 🛡️ Anti-Raid Protection\n-# Automatic protection against coordinated join attacks."),
         ui::separator(false, Spacing::Small),
         ui::text("**🎚️ Detection Sensitivity**"),
         ui::action_row(vec![select.into()]),
@@ -145,7 +259,7 @@ pub fn build_setup_slowmode_form(cfg: &SlowmodeConfig) -> Vec<Component> {
         if on { ButtonStyle::Success } else { ButtonStyle::Danger },
     );
     vec![Container::new(vec![
-        ui::text("**⏱️ Auto-Slowmode**\nAutomatically slows down channels when message volume spikes."),
+        ui::text("## ⏱️ Auto-Slowmode\n-# Automatically slows down channels when message volume spikes."),
         ui::separator(false, Spacing::Small),
         ui::action_row(vec![toggle.into()]),
         ui::separator(false, Spacing::Small),

@@ -4,7 +4,7 @@ use poise::serenity_prelude as serenity;
 
 use crate::context::BotData;
 use crate::ui;
-use crate::util::modal_field;
+use crate::util::modal_secs;
 
 use super::super::view::{build_setup_appeals_form, build_setup_raid_form, build_setup_slowmode_form};
 
@@ -22,10 +22,7 @@ pub async fn handle(
 
     match mi.data.custom_id.as_str() {
         "m:setup:appeal_cooldown" => {
-            let days: i64 = modal_field(&mi.data.components, "appeal_cooldown")
-                .and_then(|s| s.trim().parse().ok())
-                .unwrap_or(7)
-                .max(0);
+            let days: i64 = modal_secs(&mi.data.components, "appeal_cooldown").unwrap_or(7).max(0);
             let cfg = data.db.get_or_create_mod_config(&g).await?;
             data.db
                 .update_mod_config(&g, cfg.staff_role_ids.as_deref(), cfg.dm_on_warn, cfg.dm_on_timeout, cfg.dm_on_kick, cfg.dm_on_ban, days)
@@ -36,10 +33,7 @@ pub async fn handle(
             return Ok(());
         }
         "m:setup:raid_slowmode" => {
-            let secs: i64 = modal_field(&mi.data.components, "raid_slowmode")
-                .and_then(|s| s.trim().parse().ok())
-                .unwrap_or(30)
-                .max(1);
+            let secs: i64 = modal_secs(&mi.data.components, "raid_slowmode").unwrap_or(30).max(1);
             let cfg = data.db.get_or_create_raid_config(&g).await?;
             data.db.update_raid_config(&g, cfg.join_threshold, cfg.decay_rate, secs).await?;
             let new_cfg = data.db.get_or_create_raid_config(&g).await?;
@@ -47,14 +41,8 @@ pub async fn handle(
             return Ok(());
         }
         "m:setup:slowmode_config" => {
-            let window: i64 = modal_field(&mi.data.components, "slowmode_window")
-                .and_then(|s| s.trim().parse().ok())
-                .unwrap_or(10)
-                .max(1);
-            let capacity: i64 = modal_field(&mi.data.components, "slowmode_capacity")
-                .and_then(|s| s.trim().parse().ok())
-                .unwrap_or(20)
-                .max(1);
+            let window: i64 = modal_secs(&mi.data.components, "slowmode_window").unwrap_or(10).max(1);
+            let capacity: i64 = modal_secs(&mi.data.components, "slowmode_capacity").unwrap_or(20).max(1);
             let cfg = data.db.get_or_create_slowmode_config(&g).await?;
             data.db.update_slowmode_config(&g, cfg.enabled, window, capacity).await?;
             let new_cfg = data.db.get_or_create_slowmode_config(&g).await?;
