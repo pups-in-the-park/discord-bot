@@ -21,14 +21,7 @@ pub async fn timeout_user(ctx: Context<'_>, target: serenity::User) -> Result<()
                     Some("What did they do?"),
                     None,
                 ),
-                crate::util::modal_input(
-                    "How long to mute",
-                    "duration",
-                    false,
-                    true,
-                    Some("60s / 5min / 10min / 1h / 1d / 1w"),
-                    Some("1h"),
-                ),
+                crate::util::duration_select("How long to mute", "duration", 3600),
             ]),
     )
     .await?;

@@ -1327,6 +1327,28 @@ impl Database {
         Ok(())
     }
 
+    /// Active, time-limited bans (temporary bans). The expiry task filters these by
+    /// comparing `expires_at` against the current time in Rust (avoids SQLite
+    /// datetime-format pitfalls with RFC3339 strings).
+    pub async fn get_active_temp_bans(&self) -> Result<Vec<Infraction>> {
+        let rows = sqlx::query(
+            "SELECT id,guild_id,user_id,moderator_id,kind,reason,duration_secs,active,appealable,created_at,expires_at
+             FROM infractions WHERE kind='ban' AND active=1 AND expires_at IS NOT NULL",
+        )
+        .fetch_all(&self.pool).await?;
+        Ok(rows.iter().map(Self::map_infraction).collect())
+    }
+
+    /// Mark a user's still-active ban infractions inactive (e.g. after a manual unban
+    /// or accepted appeal), so the temp-ban expiry task won't try to lift them again.
+    pub async fn deactivate_active_bans(&self, guild_id: &str, user_id: &str) -> Result<()> {
+        sqlx::query(
+            "UPDATE infractions SET active=0 WHERE kind='ban' AND active=1 AND guild_id=? AND user_id=?",
+        )
+        .bind(guild_id).bind(user_id).execute(&self.pool).await?;
+        Ok(())
+    }
+
     // ── Appeals ───────────────────────────────────────────────────────────────
 
     fn map_appeal(r: &sqlx::sqlite::SqliteRow) -> Appeal {

@@ -36,6 +36,9 @@ pub async fn unban(
         )
         .await?;
 
+    // Clear any active ban infraction so the temp-ban expiry task won't re-process it.
+    ctx.data().db.deactivate_active_bans(&guild_id.to_string(), &uid.to_string()).await.ok();
+
     // Best-effort courtesy DM (the user shares no guild with us once unbanned, so
     // this may not deliver).
     if let Ok(user) = uid.to_user(&ctx.serenity_context().http).await {

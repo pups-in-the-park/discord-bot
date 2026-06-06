@@ -47,6 +47,36 @@ impl TimeoutDuration {
 }
 
 #[derive(Debug, poise::ChoiceParameter)]
+pub enum BanDuration {
+    #[name = "Permanent"]
+    Permanent,
+    #[name = "1 day"]
+    Day1,
+    #[name = "3 days"]
+    Days3,
+    #[name = "7 days"]
+    Days7,
+    #[name = "14 days"]
+    Days14,
+    #[name = "30 days"]
+    Days30,
+}
+
+impl BanDuration {
+    /// Seconds, or `0` for a permanent ban.
+    pub fn as_secs(&self) -> i64 {
+        match self {
+            Self::Permanent => 0,
+            Self::Day1 => 86_400,
+            Self::Days3 => 259_200,
+            Self::Days7 => 604_800,
+            Self::Days14 => 1_209_600,
+            Self::Days30 => 2_592_000,
+        }
+    }
+}
+
+#[derive(Debug, poise::ChoiceParameter)]
 pub enum DeleteMessages {
     #[name = "Don't delete any"]
     None,

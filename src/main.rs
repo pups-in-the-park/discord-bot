@@ -101,6 +101,7 @@ impl serenity::EventHandler for Handler {
                     info!("Guild commands registered");
                 }
                 tokio::spawn(auto_close_task(ctx.http.clone(), self.data.clone()));
+                tokio::spawn(expire_bans_task(ctx.http.clone(), self.data.clone()));
             }
 
             // poise handles ApplicationCommand interactions; we dispatch the two
@@ -163,6 +164,77 @@ async fn auto_close_task(http: Arc<serenity::Http>, data: Arc<BotData>) {
             }
             Err(e) => {
                 tracing::warn!("Auto-close DB error: {:?}", e);
+            }
+        }
+    }
+}
+
+// ── Temporary-ban expiry background task ──────────────────────────────────────
+
+async fn expire_bans_task(http: Arc<serenity::Http>, data: Arc<BotData>) {
+    let bot_id = http
+        .get_current_user()
+        .await
+        .map(|u| u.id)
+        .unwrap_or(serenity::UserId::new(1));
+
+    // 5-minute poll cycle; skip the first immediate tick.
+    let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(5 * 60));
+    interval.tick().await;
+
+    loop {
+        interval.tick().await;
+
+        let bans = match data.db.get_active_temp_bans().await {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::warn!("Temp-ban expiry DB error: {:?}", e);
+                continue;
+            }
+        };
+        let now = serenity::Timestamp::now().unix_timestamp();
+        for inf in &bans {
+            let expired = inf
+                .expires_at
+                .as_deref()
+                .and_then(|e| chrono::DateTime::parse_from_rfc3339(e).ok())
+                .map(|dt| dt.timestamp() <= now)
+                .unwrap_or(false);
+            if !expired {
+                continue;
+            }
+            let (Ok(gid), Ok(uid)) = (inf.guild_id.parse::<u64>(), inf.user_id.parse::<u64>())
+            else {
+                data.db.deactivate_infraction(inf.id).await.ok();
+                continue;
+            };
+            let guild_id = serenity::GuildId::new(gid);
+            let user_id = serenity::UserId::new(uid);
+            info!("Lifting expired temporary ban for {} in {}", uid, gid);
+            guild_id.unban(&http, user_id, Some("Temporary ban expired")).await.ok();
+            data.db
+                .create_infraction(
+                    &inf.guild_id,
+                    &inf.user_id,
+                    &bot_id.to_string(),
+                    "unban",
+                    "Temporary ban expired",
+                    None,
+                    false,
+                    None,
+                )
+                .await
+                .ok();
+            data.db.deactivate_infraction(inf.id).await.ok();
+            if let Ok(user) = user_id.to_user(&http).await {
+                features::moderation::service::send_action_dm(
+                    &http,
+                    &user,
+                    guild_id,
+                    features::moderation::service::ModActionDm::Unban,
+                    None,
+                )
+                .await;
             }
         }
     }

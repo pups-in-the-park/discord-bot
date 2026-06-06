@@ -21,10 +21,11 @@ pub async fn handle(
         .unwrap_or("No reason given")
         .to_string();
     let delete_secs =
-        parse_delete_messages(modal_field(&mi.data.components, "delete_messages").unwrap_or("none"));
-    let appealable = modal_field(&mi.data.components, "appealable")
-        .map(|s| s.trim().to_lowercase() != "no")
-        .unwrap_or(true);
+        crate::util::modal_secs(&mi.data.components, "delete_messages").unwrap_or(0) as u32;
+    let appealable = crate::util::modal_checked(&mi.data.components, "appealable");
+    // 0 = permanent; otherwise a temporary ban that the expiry task lifts.
+    let duration_secs = crate::util::modal_secs(&mi.data.components, "duration").unwrap_or(0);
+    let (dur, expires_at, until_ts) = crate::features::moderation::service::ban_expiry(duration_secs);
 
     guild_id
         .ban(
@@ -43,9 +44,9 @@ pub async fn handle(
             &mi.user.id.to_string(),
             "ban",
             &reason,
-            None,
+            dur,
             appealable,
-            None,
+            expires_at.as_deref(),
         )
         .await?;
 
@@ -53,30 +54,19 @@ pub async fn handle(
     let mod_cfg = data.db.get_or_create_mod_config(&guild_id.to_string()).await?;
     if mod_cfg.dm_on_ban {
         let appeal_info = if appealable { Some((infraction.id, guild_id)) } else { None };
-        send_action_dm(&ctx.http, &target, guild_id, ModActionDm::Ban { reason: &reason }, appeal_info)
+        send_action_dm(&ctx.http, &target, guild_id, ModActionDm::Ban { reason: &reason, until: until_ts }, appeal_info)
             .await;
     }
 
+    let suffix = until_ts.map(|ts| format!(" Lifts <t:{}:R>.", ts)).unwrap_or_default();
     mi.create_response(
         &ctx.http,
         serenity::CreateInteractionResponse::Message(
             serenity::CreateInteractionResponseMessage::new()
                 .ephemeral(true)
-                .content(format!("🔨 <@{}> banned.", target_id)),
+                .content(format!("🔨 <@{}> banned.{}", target_id, suffix)),
         ),
     )
     .await?;
     Ok(())
-}
-
-/// Parse a human-readable "delete messages" value into seconds.
-fn parse_delete_messages(s: &str) -> u32 {
-    match s.trim().to_lowercase().as_str() {
-        "1h" | "hour" => 3600,
-        "6h" => 21600,
-        "24h" | "day" => 86400,
-        "3d" => 259200,
-        "7d" | "week" => 604800,
-        _ => 0,
-    }
 }

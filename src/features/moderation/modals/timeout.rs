@@ -19,8 +19,7 @@ pub async fn handle(
     let reason = modal_field(&mi.data.components, "reason")
         .unwrap_or("No reason given")
         .to_string();
-    let duration_str = modal_field(&mi.data.components, "duration").unwrap_or("3600");
-    let secs: i64 = duration_str.trim().parse().unwrap_or(3600);
+    let secs: i64 = crate::util::modal_secs(&mi.data.components, "duration").unwrap_or(3600);
 
     let until = serenity::Timestamp::from_unix_timestamp(
         serenity::Timestamp::now().unix_timestamp() + secs,

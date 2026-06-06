@@ -1,5 +1,5 @@
-//! Non-UI appeal logic shared by the slash commands (`/appeal accept|deny`) and the
-//! Accept/Deny buttons on the staff appeal card. Resolving an appeal updates the DB,
+//! Non-UI appeal logic driven by the Accept/Deny buttons on the staff appeal card
+//! (and thread intro), via the resolve modal. Resolving an appeal updates the DB,
 //! rewrites the `#appeals` card, archives the thread, applies the unban (for accepted
 //! ban appeals), and DMs the appellant.
 
@@ -84,6 +84,8 @@ pub async fn resolve(
                 )
                 .await
                 .ok();
+            // Clear the active ban so the temp-ban expiry task won't re-process it.
+            data.db.deactivate_active_bans(&guild_id.to_string(), &uid.to_string()).await.ok();
             invite_url = make_rejoin_invite(ctx, guild_id).await;
         }
         if let Ok(user) = uid.to_user(ctx).await {

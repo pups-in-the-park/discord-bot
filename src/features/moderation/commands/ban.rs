@@ -1,9 +1,9 @@
 use poise::serenity_prelude as serenity;
 
-use super::DeleteMessages;
+use super::{BanDuration, DeleteMessages};
 use crate::context::{colours, Context, Error};
 use crate::features::moderation::{
-    service::{send_action_dm, ModActionDm},
+    service::{ban_expiry, send_action_dm, ModActionDm},
     view::log_action,
 };
 use crate::permissions::validate_target;
@@ -14,6 +14,7 @@ pub async fn ban(
     ctx: Context<'_>,
     #[description = "User to ban"] user: serenity::User,
     #[description = "Reason"] reason: String,
+    #[description = "Ban length (default: permanent)"] duration: Option<BanDuration>,
     #[description = "Delete messages"] delete_messages: Option<DeleteMessages>,
     #[description = "Allow appeals (default: true)"] appealable: Option<bool>,
 ) -> Result<(), Error> {
@@ -23,6 +24,7 @@ pub async fn ban(
 
     let delete_secs = delete_messages.as_ref().map(|d| d.as_secs()).unwrap_or(0);
     let appealable = appealable.unwrap_or(true);
+    let (dur, expires_at, until_ts) = ban_expiry(duration.as_ref().map(|d| d.as_secs()).unwrap_or(0));
 
     let mod_cfg = ctx.data().db.get_or_create_mod_config(&gid).await?;
 
@@ -40,9 +42,9 @@ pub async fn ban(
             &ctx.author().id.to_string(),
             "ban",
             &reason,
-            None,
+            dur,
             appealable,
-            None,
+            expires_at.as_deref(),
         )
         .await?;
 
@@ -52,12 +54,16 @@ pub async fn ban(
             &ctx.serenity_context().http,
             &user,
             guild_id,
-            ModActionDm::Ban { reason: &reason },
+            ModActionDm::Ban { reason: &reason, until: until_ts },
             appeal_info,
         )
         .await;
     }
 
+    let length = match until_ts {
+        Some(ts) => format!("Temporary — lifts <t:{}:R>", ts),
+        None => "Permanent".to_string(),
+    };
     log_action(
         ctx.serenity_context(),
         &ctx.data(),
@@ -67,7 +73,7 @@ pub async fn ban(
         &user,
         ctx.author(),
         &reason,
-        if appealable { Some("Appealable") } else { Some("Not appealable") },
+        Some(&length),
     )
     .await;
 
@@ -77,9 +83,10 @@ pub async fn ban(
                 .colour(colours::DARK_RED)
                 .title("🔨 Member Banned")
                 .description(format!(
-                    "<@{}> has been banned.\nReason: {}\nAppealable: {}",
+                    "<@{}> has been banned.\nReason: {}\nLength: {}\nAppealable: {}",
                     user.id,
                     reason,
+                    length,
                     if appealable { "Yes" } else { "No" }
                 )),
         ),

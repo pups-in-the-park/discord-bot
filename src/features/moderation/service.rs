@@ -14,7 +14,8 @@ pub enum ModActionDm<'a> {
     Warn { reason: &'a str },
     Timeout { reason: &'a str, until: serenity::Timestamp },
     Kick { reason: &'a str },
-    Ban { reason: &'a str },
+    /// `until` is the unix timestamp a temporary ban lifts, or `None` if permanent.
+    Ban { reason: &'a str, until: Option<i64> },
     Untimeout,
     Unban,
     /// Blocked from a feature (tickets/reports/concerns/appeals). `expires_ts` is a
@@ -61,10 +62,17 @@ impl ModActionDm<'_> {
                  invite, but please follow the rules.",
                 reason_line(reason)
             ),
-            ModActionDm::Ban { reason } => format!(
-                "🔨 **You've been banned from {guild}.**{}",
-                reason_line(reason)
-            ),
+            ModActionDm::Ban { reason, until } => {
+                let duration = match until {
+                    Some(ts) => format!("\nThis ban lifts <t:{ts}:F> (<t:{ts}:R>)."),
+                    None => String::new(),
+                };
+                format!(
+                    "🔨 **You've been banned from {guild}.**{}{}",
+                    reason_line(reason),
+                    duration
+                )
+            }
             ModActionDm::Untimeout => format!(
                 "✅ **Your timeout in {guild} has been lifted.** You can take part again — thanks for \
                  your patience."
@@ -84,6 +92,20 @@ impl ModActionDm<'_> {
                 )
             }
         }
+    }
+}
+
+/// Compute `(duration_secs, expires_at_rfc3339, until_unix)` for a ban of `secs`
+/// seconds. `secs <= 0` is a permanent ban (all `None`). The RFC3339 string is what
+/// gets stored on the infraction; the unix timestamp is for DM/log copy.
+pub fn ban_expiry(secs: i64) -> (Option<i64>, Option<String>, Option<i64>) {
+    if secs <= 0 {
+        return (None, None, None);
+    }
+    let until_unix = serenity::Timestamp::now().unix_timestamp() + secs;
+    match serenity::Timestamp::from_unix_timestamp(until_unix) {
+        Ok(ts) => (Some(secs), Some(ts.to_rfc3339()), Some(until_unix)),
+        Err(_) => (Some(secs), None, None),
     }
 }
 
@@ -111,21 +133,32 @@ pub async fn send_action_dm(
 
     let mut body = action.body(&guild);
 
-    let mut components: Vec<ui::Component> = Vec::new();
+    // A DM the member must act on (Appeal button) is interactive → CV2 card. A DM
+    // that's a pure notice (no appeal) is read-only → embed. One paradigm per
+    // message, per the UI conventions.
     if let Some((infraction_id, gid)) = appeal_info {
         body.push_str("\n\nIf you believe this was a mistake, you can appeal below.");
-        components.push(ui::text(body));
-        components.push(ui::action_row(vec![Button::new(
-            cid_appeal_btn(infraction_id, gid.get()),
-            "Appeal this action",
-            ButtonStyle::Secondary,
-        )
-        .emoji("📝")
-        .into()]));
+        let card = Container::new(vec![
+            ui::text(body),
+            ui::action_row(vec![Button::new(
+                cid_appeal_btn(infraction_id, gid.get()),
+                "Appeal this action",
+                ButtonStyle::Secondary,
+            )
+            .emoji("📝")
+            .into()]),
+        ])
+        .accent(action.accent());
+        ui::send(http, dm_channel.id, &[card.into()]).await.ok();
     } else {
-        components.push(ui::text(body));
+        let embed = serenity::CreateEmbed::new()
+            .colour(serenity::Colour::new(action.accent()))
+            .description(body);
+        dm_channel
+            .id
+            .widen()
+            .send_message(http, serenity::CreateMessage::new().embed(embed))
+            .await
+            .ok();
     }
-
-    let card = Container::new(components).accent(action.accent());
-    ui::send(http, dm_channel.id, &[card.into()]).await.ok();
 }
