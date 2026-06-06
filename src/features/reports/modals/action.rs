@@ -124,8 +124,8 @@ pub async fn handle(
             }
         }
         "timeout" => {
-            let duration_str = modal_field(&mi.data.components, "duration").unwrap_or("3600");
-            let secs: i64 = duration_str.trim().parse().unwrap_or(3600);
+            let secs: i64 =
+                crate::util::modal_secs(&mi.data.components, "duration").unwrap_or(3600);
             let until = serenity::Timestamp::from_unix_timestamp(
                 serenity::Timestamp::now().unix_timestamp() + secs,
             )
@@ -171,9 +171,10 @@ pub async fn handle(
                 .await?;
         }
         "ban" => {
-            let appealable = modal_field(&mi.data.components, "appealable")
-                .map(|s| s.trim().to_lowercase() != "no")
-                .unwrap_or(true);
+            let appealable = crate::util::modal_checked(&mi.data.components, "appealable");
+            let duration_secs = crate::util::modal_secs(&mi.data.components, "duration").unwrap_or(0);
+            let (dur, expires_at, until_ts) =
+                crate::features::moderation::service::ban_expiry(duration_secs);
             guild_id
                 .ban(&ctx.http, serenity::UserId::new(target_id), 0, Some(&reason))
                 .await
@@ -186,9 +187,9 @@ pub async fn handle(
                     &mi.user.id.to_string(),
                     "ban",
                     &reason,
-                    None,
+                    dur,
                     appealable,
-                    None,
+                    expires_at.as_deref(),
                 )
                 .await?;
             let target = serenity::UserId::new(target_id).to_user(ctx).await?;
@@ -203,7 +204,7 @@ pub async fn handle(
                     &ctx.http,
                     &target,
                     guild_id,
-                    crate::features::moderation::service::ModActionDm::Ban { reason: &reason },
+                    crate::features::moderation::service::ModActionDm::Ban { reason: &reason, until: until_ts },
                     appeal_info,
                 )
                 .await;

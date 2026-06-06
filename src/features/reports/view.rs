@@ -169,7 +169,7 @@ pub async fn post_investigation_cards(
     report: &Report,
 ) {
     let mut detail = format!(
-        "**📋 Report Investigation**\nReporter: <@{}>\nTarget: <@{}>",
+        "Reporter: <@{}>\nTarget: <@{}>",
         report.reporter_id, report.target_user_id,
     );
     if let Some(ref parts) = report.profile_parts {
@@ -210,8 +210,17 @@ pub async fn post_investigation_cards(
         }
     }
 
-    let detail_card = Container::new(vec![ui::text(detail)]).accent(colours::ORANGE.0);
-    ui::send(&ctx.http, thread_id, &[detail_card.into()]).await.ok();
+    // The investigation detail is a read-only briefing (no controls) → embed. The
+    // separate action card below carries the buttons and stays CV2.
+    let detail_embed = serenity::CreateEmbed::new()
+        .colour(colours::ORANGE)
+        .title("📋 Report Investigation")
+        .description(detail);
+    thread_id
+        .widen()
+        .send_message(&ctx.http, serenity::CreateMessage::new().embed(detail_embed))
+        .await
+        .ok();
 
     // Forward the reported message into the thread so mods see it natively, with
     // attachments and embeds intact. The quoted snapshot above is the fallback if
@@ -313,9 +322,13 @@ pub async fn notify_reporter_action_taken(ctx: &serenity::Context, reporter_id: 
         return;
     };
 
-    let card = Container::new(vec![ui::text(
-        "**Report Update**\nThank you for your report. Action has been taken.",
-    )])
-    .accent(colours::GREEN.0);
-    ui::send(&ctx.http, dm.id, &[card.into()]).await.ok();
+    // Read-only notice (no concern button) → embed.
+    let embed = serenity::CreateEmbed::new()
+        .colour(colours::GREEN)
+        .description("**Report Update**\nThank you for your report. Action has been taken.");
+    dm.id
+        .widen()
+        .send_message(&ctx.http, serenity::CreateMessage::new().embed(embed))
+        .await
+        .ok();
 }

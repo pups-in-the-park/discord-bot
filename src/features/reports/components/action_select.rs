@@ -2,8 +2,9 @@ use std::sync::Arc;
 
 use poise::serenity_prelude as serenity;
 
-use crate::context::BotData;
+use crate::context::{colours, BotData};
 use crate::ids::cid_report_action_chosen;
+use crate::ui::{self, SelectOption, StringSelect};
 use crate::util::respond_ephemeral;
 
 /// "Take Action" button: present the ephemeral action-picker select.
@@ -37,35 +38,26 @@ pub async fn handle(
     }
 
     // Message-specific actions only apply when the report references a message.
+    // The action picker is inline (not a modal select) on purpose: the chosen
+    // action drives which modal fields appear next — only an inline select can do
+    // that. Built as a CV2 container via the ui:: kit, per the UI conventions.
     let mut options = Vec::new();
     if report.message_url.is_some() {
-        options.push(serenity::CreateSelectMenuOption::new("Delete message", "del"));
-        options.push(serenity::CreateSelectMenuOption::new("Delete & Warn", "dw"));
+        options.push(SelectOption::new("del", "Delete message"));
+        options.push(SelectOption::new("dw", "Delete & Warn"));
     }
-    options.push(serenity::CreateSelectMenuOption::new("Warn", "warn"));
-    options.push(serenity::CreateSelectMenuOption::new("Timeout", "timeout"));
-    options.push(serenity::CreateSelectMenuOption::new("Kick", "kick"));
-    options.push(serenity::CreateSelectMenuOption::new("Ban", "ban"));
+    options.push(SelectOption::new("warn", "Warn"));
+    options.push(SelectOption::new("timeout", "Timeout"));
+    options.push(SelectOption::new("kick", "Kick"));
+    options.push(SelectOption::new("ban", "Ban"));
 
-    ci.create_response(
-        &ctx.http,
-        serenity::CreateInteractionResponse::Message(
-            serenity::CreateInteractionResponseMessage::new()
-                .ephemeral(true)
-                .content("Select the action to take against this user:")
-                .components(vec![serenity::CreateComponent::ActionRow(
-                    serenity::CreateActionRow::SelectMenu(
-                        serenity::CreateSelectMenu::new(
-                            cid_report_action_chosen(report_id),
-                            serenity::CreateSelectMenuKind::String {
-                                options: options.into(),
-                            },
-                        )
-                        .placeholder("Choose action…"),
-                    ),
-                )]),
-        ),
-    )
-    .await?;
+    let select = StringSelect::new(cid_report_action_chosen(report_id), options)
+        .placeholder("Choose action…");
+    let card = ui::Container::new(vec![
+        ui::text("**Select the action to take against this user:**"),
+        ui::action_row(vec![select.into()]),
+    ])
+    .accent(colours::BLURPLE.0);
+    ui::respond_ephemeral(&ctx.http, ci, &[card.into()]).await?;
     Ok(())
 }
