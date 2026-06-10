@@ -8,8 +8,10 @@ use poise::serenity_prelude as serenity;
 
 use super::{Component, Modal, CV2_FLAG};
 
-fn components_json(components: &[Component]) -> serde_json::Value {
-    serde_json::to_value(components).unwrap_or_else(|_| serde_json::json!([]))
+fn components_json(components: &[Component]) -> Result<serde_json::Value> {
+    // Propagate rather than swallowing: a silently-empty component tree would wipe
+    // the message (or be rejected by Discord) while the caller still sees `Ok`.
+    Ok(serde_json::to_value(components)?)
 }
 
 /// Send a CV2 message to a channel. Returns the created message.
@@ -18,7 +20,7 @@ pub async fn send(
     channel_id: serenity::ChannelId,
     components: &[Component],
 ) -> Result<serenity::Message> {
-    let body = serde_json::json!({ "flags": CV2_FLAG, "components": components_json(components) });
+    let body = serde_json::json!({ "flags": CV2_FLAG, "components": components_json(components)? });
     Ok(http.send_message(channel_id.widen(), vec![], &body).await?)
 }
 
@@ -51,7 +53,7 @@ pub async fn edit(
     message_id: serenity::MessageId,
     components: &[Component],
 ) -> Result<serenity::Message> {
-    let body = serde_json::json!({ "flags": CV2_FLAG, "components": components_json(components) });
+    let body = serde_json::json!({ "flags": CV2_FLAG, "components": components_json(components)? });
     Ok(http.edit_message(channel_id.widen(), message_id, &body, vec![]).await?)
 }
 
@@ -63,7 +65,7 @@ pub async fn respond_ephemeral(
 ) -> Result<()> {
     let body = serde_json::json!({
         "type": 4,
-        "data": { "flags": 64u64 | CV2_FLAG, "components": components_json(components) },
+        "data": { "flags": 64u64 | CV2_FLAG, "components": components_json(components)? },
     });
     http.create_interaction_response(ci.id, &ci.token, &body, vec![]).await?;
     Ok(())
@@ -80,7 +82,7 @@ pub async fn respond_ephemeral_to(
 ) -> Result<()> {
     let body = serde_json::json!({
         "type": 4,
-        "data": { "flags": 64u64 | CV2_FLAG, "components": components_json(components) },
+        "data": { "flags": 64u64 | CV2_FLAG, "components": components_json(components)? },
     });
     http.create_interaction_response(interaction_id, token, &body, vec![]).await?;
     Ok(())
@@ -96,9 +98,36 @@ pub async fn update(
 ) -> Result<()> {
     let body = serde_json::json!({
         "type": 7,
-        "data": { "flags": CV2_FLAG, "components": components_json(components) },
+        "data": { "flags": CV2_FLAG, "components": components_json(components)? },
     });
     http.create_interaction_response(interaction_id, token, &body, vec![]).await?;
+    Ok(())
+}
+
+/// Acknowledge a component interaction as a deferred *update* (type 6). Buys the
+/// 15-minute follow-up window to finish slow work before editing the source
+/// message with [`update_original`]. Use when the work before the first response
+/// might otherwise blow the 3-second ack deadline.
+pub async fn defer_update(
+    http: &serenity::Http,
+    interaction_id: serenity::InteractionId,
+    token: &str,
+) -> Result<()> {
+    let body = serde_json::json!({ "type": 6 });
+    http.create_interaction_response(interaction_id, token, &body, vec![]).await?;
+    Ok(())
+}
+
+/// Edit the original response of an already-acknowledged interaction (PATCH
+/// `@original`) to a new CV2 component tree. Pairs with [`defer_update`], and
+/// works for the ephemeral config-form messages (which a channel edit can't touch).
+pub async fn update_original(
+    http: &serenity::Http,
+    token: &str,
+    components: &[Component],
+) -> Result<()> {
+    let body = serde_json::json!({ "flags": CV2_FLAG, "components": components_json(components)? });
+    http.edit_original_interaction_response(token, &body, vec![]).await?;
     Ok(())
 }
 
@@ -121,7 +150,7 @@ pub async fn slash_respond(
     if let poise::Context::Application(app) = ctx {
         let body = serde_json::json!({
             "type": 4,
-            "data": { "flags": 64u64 | CV2_FLAG, "components": components_json(components) },
+            "data": { "flags": 64u64 | CV2_FLAG, "components": components_json(components)? },
         });
         ctx.serenity_context()
             .http

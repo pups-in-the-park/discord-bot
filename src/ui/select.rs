@@ -68,7 +68,10 @@ pub struct StringSelect {
 }
 
 impl StringSelect {
-    pub fn new(custom_id: impl Into<String>, options: Vec<SelectOption>) -> Self {
+    pub fn new(custom_id: impl Into<String>, mut options: Vec<SelectOption>) -> Self {
+        // Discord rejects string selects with more than 25 options; enforce the
+        // cap here so no view code can produce an invalid payload.
+        options.truncate(25);
         Self {
             kind: Type,
             custom_id: custom_id.into(),
@@ -89,8 +92,9 @@ impl StringSelect {
         self
     }
 
+    /// Clamped to the number of options (Discord rejects `max_values` above it).
     pub fn max_values(mut self, n: u8) -> Self {
-        self.max_values = n;
+        self.max_values = n.min(self.options.len().max(1) as u8);
         self
     }
 }
