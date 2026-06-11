@@ -93,7 +93,15 @@ pub async fn handle_event(
                 let new_content = new_msg.content.to_string();
                 if old_content.trim().is_empty() && new_content.trim().is_empty() { return Ok(()); }
                 if old_content != new_content {
-                    let truncate = |s: String| if s.len() > 500 { format!("{}…", &s[..500]) } else { s };
+                    // Truncate by char count, not byte index — slicing at a raw byte
+                    // offset panics when a multibyte char (emoji, accented, CJK) straddles it.
+                    let truncate = |s: String| {
+                        if s.chars().count() > 500 {
+                            format!("{}…", s.chars().take(500).collect::<String>())
+                        } else {
+                            s
+                        }
+                    };
                     let embed = serenity::CreateEmbed::new()
                         .colour(colours::YELLOW)
                         .title("✏️ Message Edited")
