@@ -43,15 +43,29 @@ pub async fn handle(
     )
     .await?;
 
+    // Confirm appeals are actually set up *before* writing the appeal row. If we
+    // create it and then find no appeals channel, the appeal is silently lost yet
+    // the "already appealed" guard on the button permanently blocks any retry.
+    let guild_cfg = data.db.get_or_create_guild(&guild_id.to_string()).await?;
+    let Some(appeals_ch) = guild_cfg.appeals_channel_id.and_then(|s| s.parse::<u64>().ok()) else {
+        mi.create_followup(
+            &ctx.http,
+            serenity::CreateInteractionResponseFollowup::new().ephemeral(true).content(
+                "Appeals aren't set up on this server right now, so this couldn't be \
+                 submitted. Please contact a moderator directly.",
+            ),
+        )
+        .await?;
+        return Ok(());
+    };
+    let appeals_ch = serenity::ChannelId::new(appeals_ch);
+
     let appeal = data
         .db
         .create_appeal(&guild_id.to_string(), infraction_id, &mi.user.id.to_string(), &reason)
         .await?;
 
-    let guild_cfg = data.db.get_or_create_guild(&guild_id.to_string()).await?;
-    if let Some(appeals_ch) = guild_cfg.appeals_channel_id.and_then(|s| s.parse::<u64>().ok()) {
-        let appeals_ch = serenity::ChannelId::new(appeals_ch);
-
+    {
         let infraction = data
             .db
             .get_infraction_by_id(infraction_id)
