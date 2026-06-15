@@ -11,6 +11,15 @@ pub async fn handle(
     ci: &serenity::ComponentInteraction,
     concern_id: i64,
 ) -> Result<(), anyhow::Error> {
+    // Staff-only, matching every other card handler (reports, appeals, raid).
+    let Some(guild_id) = ci.guild_id else {
+        return Ok(());
+    };
+    if !crate::permissions::is_mod_staff(ctx, data, guild_id, ci.user.id).await {
+        crate::util::respond_ephemeral(ctx, ci, "You don't have permission to do that.").await;
+        return Ok(());
+    }
+
     data.db
         .mark_concern_reviewed(concern_id, &ci.user.id.to_string())
         .await?;
