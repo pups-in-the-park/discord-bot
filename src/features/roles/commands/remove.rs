@@ -1,6 +1,6 @@
 use poise::serenity_prelude as serenity;
 
-use crate::context::{colours, Context, Error};
+use crate::context::{Context, Error};
 
 /// Remove a role from a user.
 #[poise::command(slash_command, guild_only, default_member_permissions = "MANAGE_ROLES")]
@@ -10,6 +10,7 @@ pub async fn remove(
     #[description = "Role to remove"] role: serenity::Role,
 ) -> Result<(), Error> {
     let guild_id = ctx.guild_id().unwrap();
+    crate::permissions::ensure_can_manage_role(&ctx, &role).await?;
 
     guild_id
         .member(&ctx, user.id)
@@ -20,12 +21,9 @@ pub async fn remove(
         .map_err(|e| Error::user(format!("Failed to remove role: {}", e)))?;
 
     ctx.send(
-        poise::CreateReply::default().ephemeral(true).embed(
-            serenity::CreateEmbed::new()
-                .colour(colours::GREEN)
-                .title("Role Removed")
-                .description(format!("<@&{}> removed from <@{}>.", role.id, user.id)),
-        ),
+        poise::CreateReply::default()
+            .ephemeral(true)
+            .content(format!("✅ <@&{}> removed from <@{}>.", role.id, user.id)),
     )
     .await?;
     Ok(())

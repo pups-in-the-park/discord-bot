@@ -46,6 +46,47 @@ pub async fn is_mod_staff(
     member.roles.iter().any(|r| roles.contains(&r.to_string()))
 }
 
+/// Ensures `ctx.author()` may manage `role` — it must sit strictly below their
+/// highest role (the guild owner is exempt). Without this, any `MANAGE_ROLES`
+/// holder could grant or remove roles at or above their own rank, since Discord
+/// only blocks assigning roles above the *bot*.
+pub async fn ensure_can_manage_role(
+    ctx: &Context<'_>,
+    role: &serenity::Role,
+) -> Result<(), BotError> {
+    let guild_id = role.guild_id;
+
+    // The guild owner sits above the role hierarchy. Copy the id out before any
+    // await so the cache guard from `ctx.guild()` isn't held across a suspension.
+    let owner_id = ctx.guild().map(|g| g.owner_id);
+    if owner_id == Some(ctx.author().id) {
+        return Ok(());
+    }
+
+    let author = guild_id
+        .member(ctx.serenity_context(), ctx.author().id)
+        .await
+        .map_err(|_| BotError::user("Could not verify your roles."))?;
+    let roles = guild_id
+        .roles(&ctx.serenity_context().http)
+        .await
+        .map_err(|_| BotError::user("Could not load this server's roles."))?;
+    let author_top = author
+        .roles
+        .iter()
+        .filter_map(|r| roles.get(r))
+        .map(|r| r.position)
+        .max()
+        .unwrap_or(0);
+
+    if role.position >= author_top {
+        return Err(BotError::user(
+            "You can only manage roles positioned below your own highest role.",
+        ));
+    }
+    Ok(())
+}
+
 /// Validates that a moderation target is not a bot and not the invoker.
 pub async fn validate_target(ctx: &Context<'_>, user: &serenity::User) -> Result<(), BotError> {
     if user.bot() {
