@@ -16,6 +16,26 @@ pub const SENSITIVITY_LOW: SensitivityPreset    = SensitivityPreset { decay_rate
 pub const SENSITIVITY_MEDIUM: SensitivityPreset = SensitivityPreset { decay_rate: 0.15, threshold: 5.0 };
 pub const SENSITIVITY_HIGH: SensitivityPreset   = SensitivityPreset { decay_rate: 0.30, threshold: 3.0 };
 
+/// The sensitivity key ("low"/"medium"/"high") whose preset threshold is nearest
+/// to a stored `join_threshold`. Single source for displaying a config's
+/// sensitivity — keeps UI labels in sync if the presets above are ever tuned.
+pub fn sensitivity_key(join_threshold: f64) -> &'static str {
+    let presets = [
+        ("low", SENSITIVITY_LOW.threshold),
+        ("medium", SENSITIVITY_MEDIUM.threshold),
+        ("high", SENSITIVITY_HIGH.threshold),
+    ];
+    presets
+        .iter()
+        .min_by(|a, b| {
+            (join_threshold - a.1)
+                .abs()
+                .total_cmp(&(join_threshold - b.1).abs())
+        })
+        .map(|(k, _)| *k)
+        .unwrap_or("medium")
+}
+
 // ── Per-guild join scoring ─────────────────────────────────────────────────────
 
 #[derive(Default)]

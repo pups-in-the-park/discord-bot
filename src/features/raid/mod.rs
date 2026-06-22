@@ -8,4 +8,4 @@ pub mod components;
 pub mod router;
 pub mod service;
 
-pub use service::{RaidState, SENSITIVITY_HIGH, SENSITIVITY_LOW, SENSITIVITY_MEDIUM};
+pub use service::{sensitivity_key, RaidState, SENSITIVITY_HIGH, SENSITIVITY_LOW, SENSITIVITY_MEDIUM};

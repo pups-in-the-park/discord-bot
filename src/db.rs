@@ -1716,12 +1716,14 @@ impl Database {
     }
 
     pub async fn set_raid_active(&self, guild_id: &str, active: bool) -> Result<()> {
-        let triggered_at = if active { Some("datetime('now')") } else { None };
-        sqlx::query(
-            "UPDATE raid_config SET raid_active=?,raid_triggered_at=? WHERE guild_id=?",
-        )
-        .bind(active as i64).bind(triggered_at).bind(guild_id)
-        .execute(&self.pool).await?;
+        // `datetime('now')` must be evaluated by SQLite, not bound as a string —
+        // binding it stored the literal text `datetime('now')` in the column.
+        let sql = if active {
+            "UPDATE raid_config SET raid_active=1,raid_triggered_at=datetime('now') WHERE guild_id=?"
+        } else {
+            "UPDATE raid_config SET raid_active=0,raid_triggered_at=NULL WHERE guild_id=?"
+        };
+        sqlx::query(sql).bind(guild_id).execute(&self.pool).await?;
         Ok(())
     }
 
