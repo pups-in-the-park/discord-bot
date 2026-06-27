@@ -1,10 +1,10 @@
 use poise::serenity_prelude as serenity;
 
 use super::TimeoutDuration;
-use crate::context::{colours, Context, Error};
+use crate::context::{Context, Error};
 use crate::features::moderation::{
     service::{send_action_dm, ModActionDm},
-    view::log_action,
+    view::{confirm_embed, log_action},
 };
 use crate::permissions::validate_target;
 use crate::util::format_duration;
@@ -68,31 +68,29 @@ pub async fn timeout(
 
     let info = format!("{} · ends <t:{}:R>", format_duration(secs), until.unix_timestamp());
     log_action(
-        ctx.serenity_context(),
+        &ctx.serenity_context().http,
         &ctx.data(),
         guild_id,
         "timeout",
         Some(infraction.id),
         &user,
-        ctx.author(),
+        ctx.author().id,
         &reason,
         Some(&info),
     )
     .await;
 
-    ctx.send(
-        poise::CreateReply::default().ephemeral(true).embed(
-            serenity::CreateEmbed::new()
-                .colour(colours::YELLOW)
-                .title("⏱️ Timeout Applied")
-                .description(format!(
-                    "<@{}> timed out for {}.\nReason: {}",
-                    user.id,
-                    format_duration(secs),
-                    reason
-                )),
+    ctx.send(poise::CreateReply::default().ephemeral(true).embed(confirm_embed(
+        "timeout",
+        Some(infraction.id),
+        format!(
+            "<@{}> is muted for {} — ends <t:{}:R>.\n**Reason:** {}",
+            user.id,
+            format_duration(secs),
+            until.unix_timestamp(),
+            reason
         ),
-    )
+    )))
     .await?;
     Ok(())
 }

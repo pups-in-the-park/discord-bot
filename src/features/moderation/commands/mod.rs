@@ -46,7 +46,7 @@ impl TimeoutDuration {
     }
 }
 
-#[derive(Debug, poise::ChoiceParameter)]
+#[derive(Debug, Clone, Copy, poise::ChoiceParameter)]
 pub enum BanDuration {
     #[name = "Permanent"]
     Permanent,
@@ -63,7 +63,11 @@ pub enum BanDuration {
 }
 
 impl BanDuration {
-    /// Seconds, or `0` for a permanent ban.
+    /// Seconds, or `0` for a permanent ban. An explicit match (like the sibling
+    /// duration enums) keeps this reorder-safe: adding or moving a variant is a
+    /// compile error until handled, rather than silently indexing the wrong
+    /// `BAN_DURATION_PRESETS` row (or panicking out of bounds). Keep these values
+    /// in step with `BAN_DURATION_PRESETS`, which drives the modal dropdown.
     pub fn as_secs(&self) -> i64 {
         match self {
             Self::Permanent => 0,

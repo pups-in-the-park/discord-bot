@@ -3,8 +3,10 @@ use std::sync::Arc;
 use poise::serenity_prelude as serenity;
 
 use crate::context::BotData;
+use crate::features::moderation::service::{send_action_dm, ModActionDm};
+use crate::features::moderation::view::{confirm_embed, log_action};
 use crate::ids::parse_mod_timeout_modal;
-use crate::util::modal_field;
+use crate::util::{format_duration, modal_field, respond_ephemeral_modal_embed};
 
 /// "Timeout User" context-menu modal submitted (`m:timeout:{target_id}`).
 pub async fn handle(
@@ -28,6 +30,13 @@ pub async fn handle(
 
     let until_str = until.to_rfc3339();
 
+    // Fetch the target and config *before* applying the timeout, so a transient
+    // failure aborts harmlessly instead of leaving the interaction unanswered
+    // after the mute lands (which shows "interaction failed" and invites a
+    // duplicate retry).
+    let target = serenity::UserId::new(target_id).to_user(ctx).await?;
+    let mod_cfg = data.db.get_or_create_mod_config(&guild_id.to_string()).await?;
+
     guild_id
         .edit_member(
             &ctx.http,
@@ -35,9 +44,10 @@ pub async fn handle(
             serenity::EditMember::new().disable_communication_until(until),
         )
         .await
-        .ok();
+        .map_err(|e| anyhow::anyhow!("Failed to time out user: {e}"))?;
 
-    data.db
+    let infraction = data
+        .db
         .create_infraction(
             &guild_id.to_string(),
             &target_id.to_string(),
@@ -50,14 +60,46 @@ pub async fn handle(
         )
         .await?;
 
-    mi.create_response(
+    if mod_cfg.dm_on_timeout {
+        send_action_dm(
+            &ctx.http,
+            &target,
+            guild_id,
+            ModActionDm::Timeout { reason: &reason, until },
+            Some((infraction.id, guild_id)),
+        )
+        .await;
+    }
+
+    let info = format!("{} · ends <t:{}:R>", format_duration(secs), until.unix_timestamp());
+    log_action(
         &ctx.http,
-        serenity::CreateInteractionResponse::Message(
-            serenity::CreateInteractionResponseMessage::new()
-                .ephemeral(true)
-                .content(format!("⏱️ <@{}> timed out.", target_id)),
+        data,
+        guild_id,
+        "timeout",
+        Some(infraction.id),
+        &target,
+        mi.user.id,
+        &reason,
+        Some(&info),
+    )
+    .await;
+
+    respond_ephemeral_modal_embed(
+        ctx,
+        mi,
+        confirm_embed(
+            "timeout",
+            Some(infraction.id),
+            format!(
+                "<@{}> is muted for {} — ends <t:{}:R>.\n**Reason:** {}",
+                target_id,
+                format_duration(secs),
+                until.unix_timestamp(),
+                reason
+            ),
         ),
     )
-    .await?;
+    .await;
     Ok(())
 }

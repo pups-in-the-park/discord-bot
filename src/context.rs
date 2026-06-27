@@ -26,11 +26,12 @@ pub struct BotData {
     pub db: Database,
     pub config: AppConfig,
     pub raid: RaidState,
+    pub ban_cache: crate::features::moderation::BanCache,
 }
 
 impl BotData {
     pub fn new(db: Database, config: AppConfig) -> Self {
-        Self { db, config, raid: RaidState::new() }
+        Self { db, config, raid: RaidState::new(), ban_cache: Default::default() }
     }
 }
 

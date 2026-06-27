@@ -1,9 +1,9 @@
 use poise::serenity_prelude as serenity;
 
-use crate::context::{colours, Context, Error};
+use crate::context::{Context, Error};
 use crate::features::moderation::{
     service::{send_action_dm, ModActionDm},
-    view::log_action,
+    view::{confirm_embed, log_action},
 };
 
 /// Remove a timeout from a user.
@@ -41,26 +41,23 @@ pub async fn untimeout(
     send_action_dm(&ctx.serenity_context().http, &user, guild_id, ModActionDm::Untimeout, None).await;
 
     log_action(
-        ctx.serenity_context(),
+        &ctx.serenity_context().http,
         &ctx.data(),
         guild_id,
         "untimeout",
         None,
         &user,
-        ctx.author(),
+        ctx.author().id,
         &reason,
         None,
     )
     .await;
 
-    ctx.send(
-        poise::CreateReply::default().ephemeral(true).embed(
-            serenity::CreateEmbed::new()
-                .colour(colours::GREEN)
-                .title("Timeout Removed")
-                .description(format!("<@{}>'s timeout has been removed.", user.id)),
-        ),
-    )
+    ctx.send(poise::CreateReply::default().ephemeral(true).embed(confirm_embed(
+        "untimeout",
+        None,
+        format!("<@{}> can speak again.\n**Reason:** {}", user.id, reason),
+    )))
     .await?;
     Ok(())
 }

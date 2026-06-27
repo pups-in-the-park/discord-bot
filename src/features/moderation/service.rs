@@ -162,3 +162,43 @@ pub async fn send_action_dm(
             .ok();
     }
 }
+
+/// Lift a ban: unban on Discord, record an `unban` infraction, deactivate any
+/// active ban rows, post to the mod-log, and send a courtesy DM. Shared by
+/// `/unban` and the temp-ban expiry task so the two paths can't drift. Returns
+/// the new infraction's id.
+pub async fn lift_ban(
+    http: &serenity::Http,
+    data: &std::sync::Arc<crate::context::BotData>,
+    guild_id: serenity::GuildId,
+    user_id: serenity::UserId,
+    moderator_id: serenity::UserId,
+    reason: &str,
+) -> anyhow::Result<i64> {
+    guild_id.unban(http, user_id, Some(reason)).await?;
+    let g = guild_id.to_string();
+    let u = user_id.to_string();
+    let infraction = data
+        .db
+        .create_infraction(&g, &u, &moderator_id.to_string(), "unban", reason, None, false, None)
+        .await?;
+    data.db.deactivate_active_bans(&g, &u).await.ok();
+    // Best-effort courtesy DM (the user shares no guild with us once unbanned,
+    // so this may not deliver). The same fetch feeds the mod-log entry.
+    if let Ok(user) = user_id.to_user(http).await {
+        send_action_dm(http, &user, guild_id, ModActionDm::Unban, None).await;
+        crate::features::moderation::view::log_action(
+            http,
+            data,
+            guild_id,
+            "unban",
+            Some(infraction.id),
+            &user,
+            moderator_id,
+            reason,
+            None,
+        )
+        .await;
+    }
+    Ok(infraction.id)
+}

@@ -1,10 +1,10 @@
 use poise::serenity_prelude as serenity;
 
 use super::{BanDuration, DeleteMessages};
-use crate::context::{colours, Context, Error};
+use crate::context::{Context, Error};
 use crate::features::moderation::{
     service::{ban_expiry, send_action_dm, ModActionDm},
-    view::log_action,
+    view::{confirm_embed, log_action},
 };
 use crate::permissions::validate_target;
 
@@ -28,11 +28,13 @@ pub async fn ban(
 
     let mod_cfg = ctx.data().db.get_or_create_mod_config(&gid).await?;
 
-    guild_id
-        .ban(&ctx.serenity_context().http, user.id, delete_secs as u32, Some(&reason))
-        .await
-        .map_err(|e| Error::user(format!("Failed to ban user: {}", e)))?;
-
+    // A new ban supersedes any active one — deactivate older ban infractions
+    // first, or an earlier temp ban's expiry would lift this ban.
+    ctx.data().db.deactivate_active_bans(&gid, &user.id.to_string()).await.ok();
+    // Record and DM *before* the ban: once the member is removed they share no
+    // guild with the bot, so the ban/appeal notice can no longer be delivered.
+    // If the ban itself fails below, the command aborts with the error rather
+    // than confirming a ban that never happened.
     let infraction = ctx
         .data()
         .db
@@ -60,37 +62,43 @@ pub async fn ban(
         .await;
     }
 
+    guild_id
+        .ban(&ctx.serenity_context().http, user.id, delete_secs as u32, Some(&reason))
+        .await
+        .map_err(|e| Error::user(format!("Failed to ban user: {}", e)))?;
+
     let length = match until_ts {
         Some(ts) => format!("Temporary — lifts <t:{}:R>", ts),
         None => "Permanent".to_string(),
     };
     log_action(
-        ctx.serenity_context(),
+        &ctx.serenity_context().http,
         &ctx.data(),
         guild_id,
         "ban",
         Some(infraction.id),
         &user,
-        ctx.author(),
+        ctx.author().id,
         &reason,
         Some(&length),
     )
     .await;
 
-    ctx.send(
-        poise::CreateReply::default().ephemeral(true).embed(
-            serenity::CreateEmbed::new()
-                .colour(colours::DARK_RED)
-                .title("🔨 Member Banned")
-                .description(format!(
-                    "<@{}> has been banned.\nReason: {}\nLength: {}\nAppealable: {}",
-                    user.id,
-                    reason,
-                    length,
-                    if appealable { "Yes" } else { "No" }
-                )),
+    let length_phrase = match until_ts {
+        Some(ts) => format!("until <t:{ts}:F> (<t:{ts}:R>)"),
+        None => "permanently".to_string(),
+    };
+    ctx.send(poise::CreateReply::default().ephemeral(true).embed(confirm_embed(
+        "ban",
+        Some(infraction.id),
+        format!(
+            "<@{}> is banned {}.\n**Reason:** {}\n**Appeals:** {}",
+            user.id,
+            length_phrase,
+            reason,
+            if appealable { "Allowed" } else { "Not allowed" }
         ),
-    )
+    )))
     .await?;
     Ok(())
 }

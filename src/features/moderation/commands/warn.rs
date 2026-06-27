@@ -1,9 +1,9 @@
 use poise::serenity_prelude as serenity;
 
-use crate::context::{colours, Context, Error};
+use crate::context::{Context, Error};
 use crate::features::moderation::{
     service::{send_action_dm, ModActionDm},
-    view::log_action,
+    view::{confirm_embed, log_action},
 };
 use crate::permissions::validate_target;
 
@@ -46,26 +46,23 @@ pub async fn warn(
     }
 
     log_action(
-        ctx.serenity_context(),
+        &ctx.serenity_context().http,
         &ctx.data(),
         guild_id,
         "warn",
         Some(infraction.id),
         &user,
-        ctx.author(),
+        ctx.author().id,
         &reason,
         None,
     )
     .await;
 
-    ctx.send(
-        poise::CreateReply::default().ephemeral(true).embed(
-            serenity::CreateEmbed::new()
-                .colour(colours::YELLOW)
-                .title("⚠️ Warning Issued")
-                .description(format!("<@{}> has been warned.\nReason: {}", user.id, reason)),
-        ),
-    )
+    ctx.send(poise::CreateReply::default().ephemeral(true).embed(confirm_embed(
+        "warn",
+        Some(infraction.id),
+        format!("<@{}> has been warned.\n**Reason:** {}", user.id, reason),
+    )))
     .await?;
     Ok(())
 }

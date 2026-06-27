@@ -4,8 +4,9 @@ use poise::serenity_prelude as serenity;
 
 use crate::context::BotData;
 use crate::features::moderation::service::{send_action_dm, ModActionDm};
+use crate::features::moderation::view::{confirm_embed, log_action};
 use crate::ids::parse_mod_warn_modal;
-use crate::util::modal_field;
+use crate::util::{modal_field, respond_ephemeral_modal_embed};
 
 /// "Warn User" context-menu modal submitted (`m:warn:{target_id}`).
 pub async fn handle(
@@ -48,14 +49,28 @@ pub async fn handle(
         .await;
     }
 
-    mi.create_response(
+    log_action(
         &ctx.http,
-        serenity::CreateInteractionResponse::Message(
-            serenity::CreateInteractionResponseMessage::new()
-                .ephemeral(true)
-                .content(format!("⚠️ <@{}> has been warned. Reason: {}", target_id, reason)),
+        data,
+        guild_id,
+        "warn",
+        Some(infraction.id),
+        &target,
+        mi.user.id,
+        &reason,
+        None,
+    )
+    .await;
+
+    respond_ephemeral_modal_embed(
+        ctx,
+        mi,
+        confirm_embed(
+            "warn",
+            Some(infraction.id),
+            format!("<@{}> has been warned.\n**Reason:** {}", target_id, reason),
         ),
     )
-    .await?;
+    .await;
     Ok(())
 }

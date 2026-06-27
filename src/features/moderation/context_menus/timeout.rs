@@ -21,7 +21,7 @@ pub async fn timeout_user(ctx: Context<'_>, target: serenity::User) -> Result<()
                     Some("What did they do?"),
                     None,
                 ),
-                crate::util::duration_select("How long to mute", "duration", 3600),
+                crate::util::preset_select("How long to mute", "duration", crate::util::DURATION_PRESETS, 3600),
             ]),
     )
     .await?;

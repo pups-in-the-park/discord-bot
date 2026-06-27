@@ -23,10 +23,15 @@ pub fn format_infraction_history(infractions: &[crate::db::Infraction]) -> Vec<S
                 .duration_secs
                 .map(|d| format!(" ({})", format_duration(d)))
                 .unwrap_or_default();
+            // "warn" → "Warn", "timeout" → "Timeout", …
+            let mut kind = i.kind.clone();
+            if let Some(c) = kind.get_mut(0..1) {
+                c.make_ascii_uppercase();
+            }
             format!(
                 "{} **{}{}** — {}\n<@{}> · <t:{}:R>",
                 kind_emoji,
-                i.kind,
+                kind,
                 duration,
                 i.reason,
                 i.moderator_id,
@@ -74,7 +79,7 @@ pub fn modal_input(
 /// Preset timeout durations offered in moderation/report modals, as `(label, seconds)`.
 /// A select of these replaces free-text duration entry (a *choice* is a select, per
 /// the UI conventions — and it avoids the seconds-vs-`"5min"` parse mismatch).
-const DURATION_PRESETS: &[(&str, i64)] = &[
+pub const DURATION_PRESETS: &[(&str, i64)] = &[
     ("60 seconds", 60),
     ("5 minutes", 300),
     ("10 minutes", 600),
@@ -84,7 +89,7 @@ const DURATION_PRESETS: &[(&str, i64)] = &[
 ];
 
 /// Preset "delete recent messages" windows for a ban modal, as `(label, seconds)`.
-const DELETE_WINDOW_PRESETS: &[(&str, i64)] = &[
+pub const DELETE_WINDOW_PRESETS: &[(&str, i64)] = &[
     ("Don't delete any", 0),
     ("Last 1 hour", 3600),
     ("Last 6 hours", 21_600),
@@ -93,22 +98,36 @@ const DELETE_WINDOW_PRESETS: &[(&str, i64)] = &[
     ("Last 7 days", 604_800),
 ];
 
-/// Build a `Label`-wrapped single-select from `(label, seconds)` presets, pre-selecting
-/// the option whose value equals `default_secs`. Option values are the second-counts;
-/// read the choice back with [`modal_secs`].
-fn secs_select(
+/// Build a `Label`-wrapped single-select from arbitrary `(label, value)` integer
+/// presets (seconds, days, counts, …), pre-selecting the option whose value equals
+/// `default`. Option values are the numbers themselves; read the choice back with
+/// [`modal_secs`]. Use this to turn a numeric config field into a dropdown of
+/// sensible choices.
+pub fn preset_select(
     label: &str,
     custom_id: &str,
     presets: &'static [(&'static str, i64)],
     default_secs: i64,
 ) -> serenity::CreateModalComponent<'static> {
-    let options: Vec<serenity::CreateSelectMenuOption> = presets
+    let mut options: Vec<serenity::CreateSelectMenuOption> = presets
         .iter()
         .map(|(lbl, secs)| {
             serenity::CreateSelectMenuOption::new(*lbl, secs.to_string())
                 .default_selection(*secs == default_secs)
         })
         .collect();
+    // A stored value that matches no preset (set before presets existed, or by
+    // another surface) must stay representable: offer it as a pre-selected extra
+    // option so opening and re-saving the form can't silently change it.
+    if !presets.iter().any(|(_, secs)| *secs == default_secs) {
+        options.push(
+            serenity::CreateSelectMenuOption::new(
+                format!("Keep current setting ({})", default_secs),
+                default_secs.to_string(),
+            )
+            .default_selection(true),
+        );
+    }
     let menu = serenity::CreateSelectMenu::new(
         custom_id.to_string(),
         serenity::CreateSelectMenuKind::String { options: options.into() },
@@ -119,28 +138,9 @@ fn secs_select(
     serenity::CreateModalComponent::Label(serenity::CreateLabel::select_menu(label.to_string(), menu))
 }
 
-/// A `Label`-wrapped single-select of preset timeout durations for a modal.
-/// `default_secs` pre-selects its matching option; read back with [`modal_secs`].
-pub fn duration_select(
-    label: &str,
-    custom_id: &str,
-    default_secs: i64,
-) -> serenity::CreateModalComponent<'static> {
-    secs_select(label, custom_id, DURATION_PRESETS, default_secs)
-}
-
-/// A `Label`-wrapped single-select of preset message-deletion windows for a ban modal.
-/// `default_secs` pre-selects its matching option; read back with [`modal_secs`].
-pub fn delete_window_select(
-    label: &str,
-    custom_id: &str,
-    default_secs: i64,
-) -> serenity::CreateModalComponent<'static> {
-    secs_select(label, custom_id, DELETE_WINDOW_PRESETS, default_secs)
-}
-
-/// Ban-length presets for the temporary-ban dropdown. `0` = permanent.
-const BAN_DURATION_PRESETS: &[(&str, i64)] = &[
+/// Ban-length presets for the temporary-ban dropdown and the `/ban` slash-command
+/// choices (`BanDuration` mirrors this order). `0` = permanent.
+pub const BAN_DURATION_PRESETS: &[(&str, i64)] = &[
     ("Permanent", 0),
     ("1 day", 86_400),
     ("3 days", 259_200),
@@ -148,28 +148,6 @@ const BAN_DURATION_PRESETS: &[(&str, i64)] = &[
     ("14 days", 1_209_600),
     ("30 days", 2_592_000),
 ];
-
-/// A `Label`-wrapped single-select of ban-length presets (0 = permanent).
-/// Read back with [`modal_secs`] (0 means a permanent ban).
-pub fn ban_duration_select(
-    label: &str,
-    custom_id: &str,
-    default_secs: i64,
-) -> serenity::CreateModalComponent<'static> {
-    secs_select(label, custom_id, BAN_DURATION_PRESETS, default_secs)
-}
-
-/// A `Label`-wrapped single-select built from arbitrary `(label, value)` integer
-/// presets, pre-selecting `default`. Read back with [`modal_secs`]. Use this to turn
-/// a numeric config field (a time period, a count) into a dropdown of sensible choices.
-pub fn preset_select(
-    label: &str,
-    custom_id: &str,
-    presets: &'static [(&'static str, i64)],
-    default: i64,
-) -> serenity::CreateModalComponent<'static> {
-    secs_select(label, custom_id, presets, default)
-}
 
 /// A single optional checkbox — one box, ticked by default if `default`. Unlike
 /// [`yes_no_checkbox`] (two mutually-exclusive options) the user simply ticks or
@@ -292,6 +270,23 @@ pub fn format_duration(secs: i64) -> String {
     }
 }
 
+/// Reply to a modal submission with an ephemeral embed. The embed twin of
+/// [`respond_ephemeral_modal`].
+pub async fn respond_ephemeral_modal_embed(
+    ctx: &serenity::Context,
+    mi: &serenity::ModalInteraction,
+    embed: serenity::CreateEmbed<'_>,
+) {
+    mi.create_response(
+        &ctx.http,
+        serenity::CreateInteractionResponse::Message(
+            serenity::CreateInteractionResponseMessage::new().ephemeral(true).embed(embed),
+        ),
+    )
+    .await
+    .ok();
+}
+
 /// Respond to an application command (slash or context-menu) with a modal.
 /// Poise's `Context` enum has no built-in `send_modal`; we extract the raw
 /// `CommandInteraction` from the `Application` variant and call Serenity directly.
@@ -322,6 +317,25 @@ pub async fn respond_ephemeral(
     msg: &str,
 ) {
     ci.create_response(
+        &ctx.http,
+        serenity::CreateInteractionResponse::Message(
+            serenity::CreateInteractionResponseMessage::new()
+                .ephemeral(true)
+                .content(msg),
+        ),
+    )
+    .await
+    .ok();
+}
+
+/// Reply to a modal submission with a short ephemeral text message.
+/// The [`respond_ephemeral`] twin for `ModalInteraction`.
+pub async fn respond_ephemeral_modal(
+    ctx: &serenity::Context,
+    mi: &serenity::ModalInteraction,
+    msg: &str,
+) {
+    mi.create_response(
         &ctx.http,
         serenity::CreateInteractionResponse::Message(
             serenity::CreateInteractionResponseMessage::new()
