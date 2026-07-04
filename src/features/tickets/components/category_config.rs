@@ -7,8 +7,8 @@ use crate::ui::{self, Modal, TextInputStyle};
 use crate::util::respond_ephemeral;
 
 use super::super::view::{
-    build_category_config_form, build_category_delete_confirm, build_category_hub,
-    build_category_step2_modal, build_question_options_modal, build_question_type_modal,
+    build_category_basic_modal, build_category_config_form, build_category_delete_confirm,
+    build_category_hub, build_question_modal, ConfigTab,
 };
 
 /// Preset choices for "max open tickets per user" (`0` = unlimited).
@@ -29,6 +29,27 @@ const AUTO_CLOSE_PRESETS: &[(&str, i64)] = &[
     ("72 hours", 72),
     ("1 week", 168),
 ];
+
+/// Render the category configure panel in place from fresh data, on the given
+/// tab. Shared by every flow that lands on the panel (hub buttons, config
+/// controls, config modals).
+pub(in crate::features::tickets) async fn show_config_form(
+    http: &serenity::Http,
+    data: &Arc<BotData>,
+    interaction_id: serenity::InteractionId,
+    token: &str,
+    type_id: i64,
+    tab: ConfigTab,
+) -> Result<(), anyhow::Error> {
+    let cat = data
+        .db
+        .get_ticket_type_by_id(type_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Category not found"))?;
+    let roles = data.db.get_type_roles(type_id).await?;
+    let fields = data.db.get_form_fields(type_id).await?;
+    ui::update(http, interaction_id, token, &build_category_config_form(&cat, &roles, &fields, tab)).await
+}
 
 /// Every select/button inside the ephemeral category-configure form
 /// (`cat:cfg:{type_id}:{field}`). Saves immediately and rebuilds the form in place.
@@ -53,24 +74,14 @@ pub async fn handle(
         return Ok(());
     }
 
-    async fn refresh(
-        ctx: &serenity::Context,
-        data: &Arc<BotData>,
-        ci: &serenity::ComponentInteraction,
-        type_id: i64,
-    ) -> Result<(), anyhow::Error> {
-        let cat = data
-            .db
-            .get_ticket_type_by_id(type_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Category not found"))?;
-        let roles = data.db.get_type_roles(type_id).await?;
-        let fields = data.db.get_form_fields(type_id).await?;
-        ui::update(&ctx.http, ci.id, &ci.token, &build_category_config_form(&cat, &roles, &fields)).await
-    }
-
     match field {
-        // Role select — save ping roles
+        // Switch to another tab of the panel: `cat:cfg:{id}:tab:{tab}`.
+        "tab" => {
+            let tab = ConfigTab::parse(parts.get(4).copied().unwrap_or(""));
+            show_config_form(&ctx.http, data, ci.id, &ci.token, type_id, tab).await?;
+        }
+
+        // Role select — save staff roles (custom_id keeps the legacy `ping_roles` name)
         "ping_roles" => {
             let role_ids: Vec<String> = if let serenity::ComponentInteractionDataKind::RoleSelect { values, .. } = &ci.data.kind {
                 values.iter().map(|r| r.to_string()).collect()
@@ -78,7 +89,7 @@ pub async fn handle(
                 vec![]
             };
             data.db.replace_type_roles(type_id, &role_ids).await?;
-            refresh(ctx, data, ci, type_id).await?;
+            show_config_form(&ctx.http, data, ci.id, &ci.token, type_id, ConfigTab::Behaviour).await?;
         }
 
         // Channel select — save staff alert channel
@@ -89,23 +100,7 @@ pub async fn handle(
                 None
             };
             data.db.set_staff_alert_channel(type_id, ch.as_deref()).await?;
-            refresh(ctx, data, ci, type_id).await?;
-        }
-
-        // Toggle auto_add_staff
-        "auto_staff" => {
-            let cat = data.db.get_ticket_type_by_id(type_id).await?
-                .ok_or_else(|| anyhow::anyhow!("Category not found"))?;
-            data.db.set_ticket_type_auto_add_staff(type_id, !cat.auto_add_staff).await?;
-            refresh(ctx, data, ci, type_id).await?;
-        }
-
-        // Toggle has_form
-        "has_form" => {
-            let cat = data.db.get_ticket_type_by_id(type_id).await?
-                .ok_or_else(|| anyhow::anyhow!("Category not found"))?;
-            data.db.set_ticket_type_has_form(type_id, !cat.has_form).await?;
-            refresh(ctx, data, ci, type_id).await?;
+            show_config_form(&ctx.http, data, ci.id, &ci.token, type_id, ConfigTab::Behaviour).await?;
         }
 
         // Max-open dropdown (0 = unlimited).
@@ -130,17 +125,15 @@ pub async fn handle(
             ci.create_response(&ctx.http, serenity::CreateInteractionResponse::Modal(modal)).await?;
         }
 
-        // Open modal for label / emoji / color / description
+        // Open the shared basic-info modal (label / emoji / description / colour).
         "btn_basic" => {
             let cat = data.db.get_ticket_type_by_id(type_id).await?
                 .ok_or_else(|| anyhow::anyhow!("Category not found"))?;
-            let modal = Modal::new(format!("m:cat:basic:{}", type_id), "🏷️ Edit Basic Info")
-                .text_row("cat_label", "Button Label", TextInputStyle::Short, "e.g. General Support", true, Some(&cat.label))
-                .text_row("cat_emoji", "Emoji", TextInputStyle::Short, "e.g. 🎫", false, cat.emoji.as_deref())
-                .text_row("cat_color", "Accent Color (hex)", TextInputStyle::Short, "e.g. 5865F2", false, Some(&cat.color))
-                .text_row("cat_desc", "Description (shown in select menus)", TextInputStyle::Short,
-                    "Brief description of this ticket type", false, cat.description.as_deref());
-            ui::open_modal(&ctx.http, ci, &modal).await?;
+            ci.create_response(
+                &ctx.http,
+                serenity::CreateInteractionResponse::Modal(build_category_basic_modal(Some(&cat))),
+            )
+            .await?;
         }
 
         // Open modal for welcome_message
@@ -154,24 +147,29 @@ pub async fn handle(
             ui::open_modal(&ctx.http, ci, &modal).await?;
         }
 
-        // Add a question — step 1 of the wizard (label + type + required).
+        // Add a question: the type select on the Questions tab. Opens the single
+        // add-question modal tailored to the chosen type.
         "ff_add" => {
-            if data.db.get_form_fields(type_id).await?.len() >= 5 {
+            let style = if let serenity::ComponentInteractionDataKind::StringSelect { values } = &ci.data.kind {
+                values.first().map(|s| s.as_str()).unwrap_or("short").to_string()
+            } else {
+                "short".to_string()
+            };
+            if data.db.count_form_fields(type_id).await? >= 5 {
                 respond_ephemeral(ctx, ci, "This category already has the maximum of 5 questions (Discord's modal limit).").await;
                 return Ok(());
             }
             ci.create_response(
                 &ctx.http,
-                serenity::CreateInteractionResponse::Modal(build_question_type_modal(type_id)),
+                serenity::CreateInteractionResponse::Modal(build_question_modal(type_id, &style, None)),
             )
             .await?;
         }
 
-        // Add a question — step 2 (choices) for a dropdown/checkbox field.
-        // Custom id: `cat:cfg:{type_id}:ff_opts:{field_id}`.
-        "ff_opts" => {
+        // Edit a question: `cat:cfg:{type_id}:ff_edit:{field_id}` — same modal, prefilled.
+        "ff_edit" => {
             let field_id: Option<i64> = parts.get(4).and_then(|s| s.parse().ok());
-            let Some(field) = (match field_id {
+            let Some(f) = (match field_id {
                 Some(fid) => data.db.get_form_field(fid).await?,
                 None => None,
             }) else {
@@ -180,26 +178,13 @@ pub async fn handle(
             };
             ci.create_response(
                 &ctx.http,
-                serenity::CreateInteractionResponse::Modal(build_question_options_modal(&field)),
+                serenity::CreateInteractionResponse::Modal(build_question_modal(type_id, &f.style, Some(&f))),
             )
             .await?;
         }
 
-        // Category-creation wizard step 2 (appearance & behaviour) / skip.
-        "wizard" => {
-            let cat = data.db.get_ticket_type_by_id(type_id).await?
-                .ok_or_else(|| anyhow::anyhow!("Category not found"))?;
-            ci.create_response(
-                &ctx.http,
-                serenity::CreateInteractionResponse::Modal(build_category_step2_modal(&cat)),
-            )
-            .await?;
-        }
-        "wizard_done" => {
-            refresh(ctx, data, ci, type_id).await?;
-        }
-
-        // Remove the selected intake-form field; clear the form flag if it was the last.
+        // Remove the selected intake-form field. No flag to maintain — the intake
+        // form exists exactly when the category has questions.
         "ff_remove" => {
             let field_id: Option<i64> = if let serenity::ComponentInteractionDataKind::StringSelect { values } = &ci.data.kind {
                 values.first().and_then(|s| s.parse().ok())
@@ -207,13 +192,9 @@ pub async fn handle(
                 None
             };
             if let Some(fid) = field_id {
-                let before = data.db.get_form_fields(type_id).await?;
                 data.db.remove_form_field(type_id, fid).await?;
-                if before.len() <= 1 {
-                    data.db.set_ticket_type_has_form(type_id, false).await?;
-                }
             }
-            refresh(ctx, data, ci, type_id).await?;
+            show_config_form(&ctx.http, data, ci.id, &ci.token, type_id, ConfigTab::Questions).await?;
         }
 
         // Open modal for thread_name_pattern
@@ -234,12 +215,17 @@ pub async fn handle(
             ui::update(&ctx.http, ci.id, &ci.token, &build_category_delete_confirm(&cat)).await?;
         }
         "delete_no" => {
-            refresh(ctx, data, ci, type_id).await?;
+            show_config_form(&ctx.http, data, ci.id, &ci.token, type_id, ConfigTab::Overview).await?;
         }
         "delete_yes" => {
             data.db.deactivate_ticket_type(type_id).await?;
-            let cats = data.db.get_ticket_types(&guild_id.to_string()).await?;
-            ui::update(&ctx.http, ci.id, &ci.token, &build_category_hub(&cats)).await?;
+            let g = guild_id.to_string();
+            let cats = data.db.get_ticket_types(&g).await?;
+            let counts = data.db.count_form_fields_by_type(&g).await?;
+            ui::update(&ctx.http, ci.id, &ci.token, &build_category_hub(&cats, &counts)).await?;
+            // The confirm copy promises the category is removed from panels — refresh
+            // the affected live panels (after responding, to stay within the 3s window).
+            super::super::service::republish_panels_containing(&ctx.http, data, type_id).await;
         }
 
         _ => {

@@ -10,8 +10,8 @@ use crate::context::{BotData, CID_CLOSE_BTN, CID_PANEL_SELECT};
 use crate::ids;
 
 use super::components::{
-    category_config, category_hub, claim_button, close_button, panel_config, panel_hub,
-    panel_interaction, priority_select,
+    category_config, category_hub, claim_button, close_button, ctx_type_select, join_button,
+    panel_config, panel_hub, panel_interaction, priority_select,
 };
 use super::modals;
 
@@ -29,8 +29,14 @@ pub async fn route_component(
     if let Some(ticket_id) = ids::parse_claim_btn(id) {
         return Some(claim_button::handle(ctx, data, ci, ticket_id).await);
     }
+    if let Some(ticket_id) = ids::parse_ticket_join(id) {
+        return Some(join_button::handle(ctx, data, ci, ticket_id).await);
+    }
     if let Some(ticket_id) = ids::parse_priority_select(id) {
         return Some(priority_select::handle(ctx, data, ci, ticket_id).await);
+    }
+    if ids::parse_ctx_type_select(id).is_some() {
+        return Some(ctx_type_select::handle(ctx, data, ci).await);
     }
     if ids::parse_panel_btn(id).is_some() || id == CID_PANEL_SELECT {
         return Some(panel_interaction::handle(ctx, data, ci).await);
@@ -72,17 +78,13 @@ pub async fn route_modal(
         modals::category_thread::handle(ctx, data, mi).await
     } else if id.starts_with("m:cat:num:") {
         modals::category_num::handle(ctx, data, mi).await
-    } else if id.starts_with("m:cat:create2:") {
-        modals::category_create2::handle(ctx, data, mi).await
     } else if id.starts_with("m:cat:create") {
         modals::category_create::handle(ctx, data, mi).await
-    } else if id.starts_with("m:cat:edit:") {
-        modals::category_edit::handle(ctx, data, mi).await
-    } else if id.starts_with("m:ff:type:") {
-        modals::form_field_type::handle(ctx, data, mi).await
-    } else if id.starts_with("m:ff:opts:") {
-        modals::form_field_options::handle(ctx, data, mi).await
-    } else if id == "m:pnl:create" {
+    } else if id.starts_with("m:ff:new:") {
+        modals::form_field::handle_new(ctx, data, mi).await
+    } else if id.starts_with("m:ff:edit:") {
+        modals::form_field::handle_edit(ctx, data, mi).await
+    } else if id == ids::CID_PANEL_CREATE_MODAL {
         modals::panel_create::handle(ctx, data, mi).await
     } else if id.starts_with("m:pnl:basics:") {
         modals::panel_basics::handle(ctx, data, mi).await

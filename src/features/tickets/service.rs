@@ -1,17 +1,18 @@
 //! Non-UI ticket logic: opening a ticket thread, closing a ticket, and reading
 //! intake-form responses out of a submitted modal.
 
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use anyhow::Result;
 use poise::serenity_prelude as serenity;
 use tracing::warn;
 
-use crate::context::{cid_claim_btn, colours, BotData, CID_CLOSE_BTN};
+use crate::context::{colours, BotData};
 use crate::db::{Ticket, TicketType};
-use crate::ui::{self, Button, ButtonStyle, Container, Spacing};
+use crate::ui;
 use crate::util::{modal_field, sanitise_name};
+
+use super::view;
 
 pub struct OpenThreadOptions<'a> {
     pub ticket_type: &'a TicketType,
@@ -35,6 +36,10 @@ pub async fn open_thread(
     guild_id: serenity::GuildId,
     opts: OpenThreadOptions<'_>,
 ) -> Result<OpenedThread> {
+    // A stale panel/select/modal can reference a category deleted after it was
+    // rendered; enforce the invariant here so no entry point can miss it.
+    anyhow::ensure!(opts.ticket_type.active, "Ticket category is no longer available");
+
     let username = opts
         .owner_id
         .to_user(ctx)
@@ -49,7 +54,7 @@ pub async fn open_thread(
         .replace("{username}", &sanitise_name(&username))
         .replace("{type}", &sanitise_name(&opts.ticket_type.name));
 
-    let thread = opts
+    let thread = match opts
         .parent_channel_id
         .create_thread(
             &ctx.http,
@@ -58,7 +63,19 @@ pub async fn open_thread(
                 .auto_archive_duration(serenity::AutoArchiveDuration::OneWeek)
                 .invitable(false),
         )
-        .await?;
+        .await
+    {
+        Ok(t) => t,
+        Err(e) => {
+            anyhow::bail!(
+                "I couldn't create a private thread in <#{}>. Make sure it's a standard \
+                 text channel (private threads aren't allowed in announcement channels) \
+                 and that I have **Create Private Threads** and **Send Messages in \
+                 Threads** there. ({e})",
+                opts.parent_channel_id,
+            );
+        }
+    };
 
     // From here on the thread exists on Discord but isn't recorded yet. If a required
     // step fails, delete the thread so we don't strand an orphan with no DB row (which
@@ -104,154 +121,73 @@ pub async fn open_thread(
         }
     };
 
-    // Build ping content (sent as plain message so it actually notifies)
-    let ping_roles = opts.ticket_type.ping_role_ids();
-    let mut ping_parts: Vec<String> = vec![format!("<@{}>", opts.owner_id)];
-    ping_parts.extend(ping_roles.iter().map(|r| format!("<@&{}>", r)));
-    let ping_content = ping_parts.join(" ");
-
-    thread
-        .id
-        .widen()
-        .send_message(&ctx.http, serenity::CreateMessage::new().content(ping_content))
-        .await
-        .ok();
-
-    // Build CV2 ticket card
-    let color = colours::from_hex(&opts.ticket_type.color);
-    let header = format!(
-        "**{}{} — #{:04}**",
-        opts.ticket_type
-            .emoji
-            .as_deref()
-            .map(|e| format!("{} ", e))
-            .unwrap_or_default(),
-        opts.ticket_type.label,
-        opts.ticket_number,
-    );
-
-    let default_welcome = format!(
-        "Welcome, <@{}>!\nA member of staff will be with you shortly.",
-        opts.owner_id
-    );
-    let mut welcome = opts
-        .ticket_type
-        .welcome_message
-        .clone()
-        .unwrap_or(default_welcome)
-        .replace("{user}", &format!("<@{}>", opts.owner_id))
-        .replace("{username}", &username)
-        .replace("{type}", &opts.ticket_type.label);
-
-    if let Some(ref fr) = form_json {
-        if let Ok(map) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(fr) {
-            welcome.push_str("\n\n**Your responses:**");
-            for (k, v) in &map {
-                let val = v.as_str().unwrap_or("");
-                if !val.is_empty() {
-                    let indented = val.replace('\n', "\n> ");
-                    welcome.push_str(&format!("\n\n**{}:**\n> {}", k, indented));
-                }
-            }
-        }
-    }
-
-    if opts.reported_message_id.is_some() {
-        welcome.push_str(&format!(
-            "\n\n**⚑ Reported message:**\n> {}",
-            opts.reported_message_content
-                .as_deref()
-                .unwrap_or("*(no content)*"),
-        ));
-        if let Some(author) = &reported_author_id {
-            welcome.push_str(&format!("\nAuthor: <@{}>", author));
-        }
-        if let Some(ref url) = opts.reported_message_url {
-            welcome.push_str(&format!("\n[Jump to message]({})", url));
-        }
-    }
-
-    let claim_btn = Button::new(cid_claim_btn(ticket.id), "Claim", ButtonStyle::Secondary).emoji("✋");
-    let close_btn = Button::new(CID_CLOSE_BTN, "Close", ButtonStyle::Danger).emoji("🔒");
-
-    let card = Container::new(vec![
-        ui::text(header),
-        ui::separator(false, Spacing::Small),
-        ui::text(welcome),
-        ui::separator(true, Spacing::Small),
-        ui::action_row(vec![claim_btn.into(), close_btn.into()]),
-    ])
-    .accent(color.0);
-
-    ui::send(&ctx.http, serenity::ChannelId::new(thread.id.get()), &[card.into()]).await.ok();
-
-    // Auto-add staff members
     let staff_roles = data
         .db
         .get_type_roles(opts.ticket_type.id)
         .await
         .unwrap_or_default();
-    let staff_role_ids: HashSet<serenity::RoleId> = staff_roles
-        .iter()
-        .filter_map(|r| r.parse::<u64>().ok().map(serenity::RoleId::new))
-        .collect();
 
-    if opts.ticket_type.auto_add_staff && !staff_role_ids.is_empty() {
-        let mut after: Option<serenity::UserId> = None;
-        loop {
-            let members = guild_id
-                .members(&ctx.http, serenity::nonmax::NonMaxU16::new(1000), after)
+    // Build ping content (sent as plain message so it actually notifies). This
+    // is the *single* staff ping for the ticket: mentioning a role in a private
+    // thread auto-adds every role member who can view the parent channel, so
+    // one mention both notifies staff and pulls them in. Non-mentionable roles
+    // need the bot to have Mention Everyone in the parent channel; that's
+    // surfaced as a warning at panel publish time.
+    let mut ping_parts: Vec<String> = vec![format!("<@{}>", opts.owner_id)];
+    ping_parts.extend(staff_roles.iter().map(|r| format!("<@&{}>", r)));
+    let ping_content = ping_parts.join(" ");
+
+    thread
+        .id
+        .widen()
+        .send_message(
+            &ctx.http,
+            serenity::CreateMessage::new().content(ping_content).allowed_mentions(
+                serenity::CreateAllowedMentions::new().all_users(true).all_roles(true),
+            ),
+        )
+        .await
+        .ok();
+
+    // Post the CV2 ticket card and remember its message id so claim/priority
+    // changes can re-render it.
+    let card = view::build_ticket_card(opts.ticket_type, &ticket, &username);
+    match ui::send(&ctx.http, serenity::ChannelId::new(thread.id.get()), &card).await {
+        Ok(msg) => {
+            data.db
+                .set_ticket_card_message(ticket.id, &msg.id.to_string())
                 .await
-                .unwrap_or_default();
-            if members.is_empty() {
-                break;
-            }
-            for member in &members {
-                if member.user.bot() || member.user.id == opts.owner_id {
-                    continue;
-                }
-                if member.roles.iter().any(|rid| staff_role_ids.contains(rid)) {
-                    ctx.http
-                        .add_thread_channel_member(thread.id, member.user.id)
-                        .await
-                        .ok();
-                }
-            }
-            after = members.last().map(|m| m.user.id);
-            if members.len() < 1000 {
-                break;
-            }
+                .ok();
         }
+        Err(e) => warn!("Couldn't post the ticket card in thread {}: {e}", thread.id),
     }
 
-    // Per-type staff alert
+    // Per-type staff alert: a card with a Join button, preceded by a role ping so
+    // a configured alert channel actually notifies. The in-thread mention only
+    // reaches staff already added to the private thread, so a dedicated alert
+    // channel needs its own ping to be useful.
     if let Some(ref ch) = opts.ticket_type.staff_alert_channel_id {
         if let Ok(cid) = ch.parse::<u64>() {
-            let mentions = staff_roles
-                .iter()
-                .map(|r| format!("<@&{}>", r))
-                .collect::<Vec<_>>()
-                .join(" ");
-            // Read-only staff notice → embed. The thread reference stays a channel
-            // mention (a markdown link), not a link button.
-            let alert = serenity::CreateEmbed::new()
-                .colour(colours::BLURPLE)
-                .title(format!("🎫 New {} Ticket", opts.ticket_type.label))
-                .description(format!(
-                    "Ticket **#{:04}** opened by <@{}>\nThread: <#{}>",
-                    opts.ticket_number, opts.owner_id, thread.id
-                ));
-            let ch = serenity::ChannelId::new(cid);
-            if !mentions.is_empty() {
-                ch.widen()
-                    .send_message(&ctx.http, serenity::CreateMessage::new().content(&mentions))
+            let alert_ch = serenity::ChannelId::new(cid);
+            if !staff_roles.is_empty() {
+                let mentions = staff_roles
+                    .iter()
+                    .map(|r| format!("<@&{}>", r))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                alert_ch
+                    .widen()
+                    .send_message(
+                        &ctx.http,
+                        serenity::CreateMessage::new().content(mentions).allowed_mentions(
+                            serenity::CreateAllowedMentions::new().all_roles(true),
+                        ),
+                    )
                     .await
                     .ok();
             }
-            ch.widen()
-                .send_message(&ctx.http, serenity::CreateMessage::new().embed(alert))
-                .await
-                .ok();
+            let alert = view::build_staff_alert_card(opts.ticket_type, &ticket);
+            ui::send(&ctx.http, alert_ch, &alert).await.ok();
         } else {
             warn!(
                 "Invalid staff alert channel id on ticket type {}: {}",
@@ -263,6 +199,89 @@ pub async fn open_thread(
     Ok(OpenedThread { thread })
 }
 
+/// Reason a member may not open a ticket of this type right now, or `None` if
+/// they may. Shared by the panel button/select path and the intake-form submit
+/// path: the button check runs before the modal is shown, so re-checking at
+/// submit stops a rapid re-click (or a block added meanwhile) from slipping a
+/// ticket past the per-user limit or blocklist.
+pub async fn ticket_open_block_reason(
+    data: &Arc<BotData>,
+    guild_id: serenity::GuildId,
+    user_id: serenity::UserId,
+    ticket_type: &TicketType,
+) -> Result<Option<String>> {
+    // A stale panel/select/modal can reference a deactivated category.
+    if !ticket_type.active {
+        return Ok(Some("This ticket category is no longer available.".to_string()));
+    }
+    // Blocklist (category-specific, also covered by the `tickets` umbrella).
+    if let Some(block) = data
+        .db
+        .get_active_block(
+            &guild_id.to_string(),
+            &user_id.to_string(),
+            &format!("ticket:{}", ticket_type.name),
+        )
+        .await?
+    {
+        return Ok(Some(crate::features::blocklist::view::blocked_text(&block)));
+    }
+    // Max open per user (0 = unlimited).
+    let open_count = data
+        .db
+        .count_open_tickets_for_user(&guild_id.to_string(), &user_id.to_string(), ticket_type.id)
+        .await?;
+    if ticket_type.max_open_per_user > 0 && open_count >= ticket_type.max_open_per_user {
+        return Ok(Some(format!(
+            "You already have {} open ticket(s) of this type. Please wait for them to be resolved.",
+            open_count,
+        )));
+    }
+    Ok(None)
+}
+
+/// Re-render a ticket's in-thread card from its current DB state (after a claim,
+/// unclaim, or priority change). A missing card id (pre-migration tickets) or a
+/// deleted card message is not an error — the card just isn't refreshed.
+pub async fn refresh_ticket_card(
+    http: &serenity::Http,
+    data: &Arc<BotData>,
+    ticket: &Ticket,
+) -> Result<()> {
+    let Some(ref card_id) = ticket.card_message_id else {
+        return Ok(());
+    };
+    let Some(type_id) = ticket.ticket_type_id else {
+        return Ok(());
+    };
+    let Some(cat) = data.db.get_ticket_type_by_id(type_id).await? else {
+        return Ok(());
+    };
+    let Ok(owner_id) = ticket.owner_id.parse::<u64>() else {
+        return Ok(());
+    };
+    let username = serenity::UserId::new(owner_id)
+        .to_user(http)
+        .await
+        .map(|u| u.name.to_string())
+        .unwrap_or_else(|_| "user".to_string());
+
+    let card = view::build_ticket_card(&cat, ticket, &username);
+    let (Ok(channel_id), Ok(message_id)) = (ticket.thread_id.parse::<u64>(), card_id.parse::<u64>())
+    else {
+        return Ok(());
+    };
+    ui::edit(
+        http,
+        serenity::ChannelId::new(channel_id),
+        serenity::MessageId::new(message_id),
+        &card,
+    )
+    .await
+    .ok();
+    Ok(())
+}
+
 pub async fn execute_close(
     http: &serenity::Http,
     data: &Arc<BotData>,
@@ -270,6 +289,14 @@ pub async fn execute_close(
     closed_by: serenity::UserId,
     reason: Option<&str>,
 ) -> Result<()> {
+    // Idempotency guard at the shared choke point: every caller (command, modal,
+    // card button) routes through here, so re-closing an already-closed ticket
+    // (e.g. clicking a stale Close button) is a harmless no-op rather than a
+    // duplicate close embed + log entry.
+    if ticket.status == crate::db::TicketStatus::Closed {
+        return Ok(());
+    }
+
     let ticket_type = if let Some(tid) = ticket.ticket_type_id {
         data.db.get_ticket_type_by_id(tid).await.ok().flatten()
     } else {
@@ -311,9 +338,12 @@ pub async fn execute_close(
             let priority = crate::context::Priority::from_str(&ticket.priority);
             let tags = data.db.get_tags(ticket.id).await.unwrap_or_default();
 
+            // A thread link is 2-segment (`channels/{guild}/{thread}`). The
+            // 3-segment form is a *message* jump-link, which a private thread has
+            // no starter message for, so it would resolve nowhere.
             let thread_url = format!(
-                "https://discord.com/channels/{}/{}/{}",
-                ticket.guild_id, ticket.parent_channel_id, ticket.thread_id
+                "https://discord.com/channels/{}/{}",
+                ticket.guild_id, ticket.thread_id
             );
 
             // Ticket log entry → embed (logs are the canonical read-only surface).
@@ -341,6 +371,96 @@ pub async fn execute_close(
     }
 
     Ok(())
+}
+
+/// Re-render one panel's live message from current data. No-op when the panel
+/// isn't published; the edit itself is best-effort. This is the single
+/// implementation of the live-refresh sequence — every path that changes what a
+/// published panel should show goes through here.
+pub async fn republish_panel(http: &serenity::Http, data: &Arc<BotData>, panel: &crate::db::Panel) {
+    let (Some(mid), Some(cid)) = (panel.message_id.as_ref(), panel.channel_id.as_ref()) else {
+        return;
+    };
+    let (Ok(c), Ok(m)) = (cid.parse::<u64>(), mid.parse::<u64>()) else {
+        return;
+    };
+    let Ok(types) = data.db.get_panel_types(panel.id).await else {
+        return;
+    };
+    let tree = super::view::build_panel_cv2(panel, &types);
+    ui::edit(http, serenity::ChannelId::new(c), serenity::MessageId::new(m), &tree)
+        .await
+        .ok();
+}
+
+/// Refresh the live message of the panel that carries the given category, if
+/// any. Called after a category is deleted so its button/option disappears.
+pub async fn republish_panels_containing(http: &serenity::Http, data: &Arc<BotData>, type_id: i64) {
+    if let Ok(Some(panel)) = data.db.get_panel_for_type(type_id).await {
+        republish_panel(http, data, &panel).await;
+    }
+}
+
+/// Where a ticket of this category opens when there is no interaction channel
+/// to inherit (context-menu / staff-on-behalf paths): the category's panel's
+/// published channel. Errors carry a user-facing message when the category has
+/// no panel or the panel isn't published.
+pub async fn resolve_parent_for_type(
+    data: &Arc<BotData>,
+    ticket_type: &TicketType,
+) -> Result<serenity::ChannelId> {
+    let panel = data.db.get_panel_for_type(ticket_type.id).await?;
+    let Some(panel) = panel else {
+        anyhow::bail!(
+            "The **{}** category isn't on any ticket panel yet. Add it to a panel and \
+             publish the panel before opening tickets in this category.",
+            ticket_type.label,
+        );
+    };
+    let channel = panel
+        .channel_id
+        .as_ref()
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|_| panel.message_id.is_some());
+    match channel {
+        Some(c) => Ok(serenity::ChannelId::new(c)),
+        None => anyhow::bail!(
+            "The **{}** category is on the **{}** panel, but that panel hasn't been \
+             published to a channel yet. Publish it first.",
+            ticket_type.label,
+            panel.title,
+        ),
+    }
+}
+
+/// Allocate the next ticket number and open a ticket with no intake responses.
+/// Shared by every entry point whose category has no (renderable) form.
+pub async fn open_ticket_no_form(
+    ctx: &serenity::Context,
+    data: &Arc<BotData>,
+    guild_id: serenity::GuildId,
+    ticket_type: &TicketType,
+    owner_id: serenity::UserId,
+    parent_channel_id: serenity::ChannelId,
+) -> Result<OpenedThread> {
+    let ticket_number = data.db.next_ticket_number(&guild_id.to_string()).await?;
+    open_thread(
+        ctx,
+        data,
+        guild_id,
+        OpenThreadOptions {
+            ticket_type,
+            ticket_number,
+            owner_id,
+            parent_channel_id,
+            form_responses: None,
+            reported_message_id: None,
+            reported_message_url: None,
+            reported_message_content: None,
+            reported_author_id: None,
+        },
+    )
+    .await
 }
 
 /// Read intake-form responses out of a submitted modal, keyed by field label.

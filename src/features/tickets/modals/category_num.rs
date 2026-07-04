@@ -34,6 +34,6 @@ pub async fn handle(
         _ => {}
     }
 
-    refresh_category_form(ctx, data, mi, type_id).await?;
+    refresh_category_form(ctx, data, mi, type_id, super::super::view::ConfigTab::Behaviour).await?;
     Ok(())
 }

@@ -34,6 +34,6 @@ pub async fn handle(
         .update_ticket_type(type_id, &current.label, current.emoji.as_deref(), current.description.as_deref(), &current.color, welcome.as_deref())
         .await?;
 
-    refresh_category_form(ctx, data, mi, type_id).await?;
+    refresh_category_form(ctx, data, mi, type_id, super::super::view::ConfigTab::Overview).await?;
     Ok(())
 }

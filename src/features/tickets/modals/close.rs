@@ -20,6 +20,28 @@ pub async fn handle(
     let reason = modal_field(&mi.data.components, CLOSE_REASON_FIELD).filter(|s| !s.is_empty());
 
     if let Some(ticket) = data.db.get_ticket_by_id(ticket_id).await? {
+        // Authoritative gate: the /ticket close command checks staff-or-owner, so
+        // the button flow must too — otherwise anyone pulled into the thread via
+        // `/ticket add` could close it by submitting this modal.
+        let is_owner = ticket.owner_id == mi.user.id.to_string();
+        let allowed = match mi.guild_id {
+            Some(gid) => {
+                is_owner || crate::permissions::is_mod_staff(ctx, data, gid, mi.user.id).await
+            }
+            None => is_owner,
+        };
+        if !allowed {
+            mi.create_response(
+                &ctx.http,
+                serenity::CreateInteractionResponse::Message(
+                    serenity::CreateInteractionResponseMessage::new()
+                        .ephemeral(true)
+                        .content("Only staff or the ticket owner can close this ticket."),
+                ),
+            )
+            .await?;
+            return Ok(());
+        }
         execute_close(&ctx.http, data, &ticket, mi.user.id, reason).await?;
     }
 

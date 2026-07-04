@@ -1,6 +1,6 @@
 use poise::serenity_prelude as serenity;
 
-use crate::context::{colours, Context, Error};
+use crate::context::{Context, Error};
 
 /// Add a user to this ticket.
 #[poise::command(slash_command, guild_only)]
@@ -34,11 +34,8 @@ pub async fn add(
     ctx.data().db.add_member(ticket.id, &user.id.to_string(), &ctx.author().id.to_string()).await?;
 
     ctx.send(
-        poise::CreateReply::default().embed(
-            serenity::CreateEmbed::new()
-                .colour(colours::GREEN)
-                .description(format!("<@{}> has been added to the ticket.", user.id)),
-        ),
+        poise::CreateReply::default()
+            .content(format!("✅ <@{}> has been added to the ticket.", user.id)),
     )
     .await?;
     Ok(())

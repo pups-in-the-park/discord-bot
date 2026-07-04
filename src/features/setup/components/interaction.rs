@@ -101,13 +101,7 @@ pub async fn handle(
             ui::update(&ctx.http, ci.id, &ci.token, &build_setup_log_form(&cfg)).await?;
         }
 
-        // ── Ticket channels ──────────────────────────────────────────────────
-        "setup:ticket:channel" => {
-            let ch = selected_channel(ci);
-            data.db.set_ticket_channel(&g, ch.as_deref()).await?;
-            let cfg = data.db.get_or_create_guild(&g).await?;
-            ui::update(&ctx.http, ci.id, &ci.token, &build_setup_ticket_form(&cfg)).await?;
-        }
+        // ── Reports channel ──────────────────────────────────────────────────
         "setup:ticket:reports" => {
             let ch = selected_channel(ci);
             data.db.set_reports_channel(&g, ch.as_deref()).await?;

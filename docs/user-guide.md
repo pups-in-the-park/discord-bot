@@ -81,7 +81,13 @@ All moderation commands respond ephemerally (only you can see the reply). Action
 
 ### Ticket Management
 
-Inside any ticket thread, staff can use:
+The **ticket card** at the top of each thread has the quick controls: **Claim**
+(shows "Claimed by @you" and disables until `/ticket unclaim`), **Close**, and a
+**priority dropdown** (staff only). If the category has a staff-alert channel, a
+card is posted there for each new ticket with a **🎟️ Join Ticket** button — it
+adds you to the thread, or just takes you there if you're already in.
+
+Inside any ticket thread, staff can also use:
 
 | Command | Description |
 |---|---|
@@ -167,16 +173,17 @@ Both systems are configured via `/setup raid` and `/setup slowmode`.
 
 **Start with `/setup overview`.** It opens a dashboard showing every configuration
 area with a ✅ (ready) or ⚠️ (needs attention) marker, and a button to jump straight
-into each one — you never have to memorise command names. The dashboard also flags the
-**ticket channel**, which the ticket system can't work without.
+into each one — you never have to memorise command names. The dashboard also flags
+when no panel is **published** yet, which the ticket system can't work without —
+ticket threads open in the channel each panel is published to.
 
 All settings are per-guild and save immediately when you change them in the form.
 
 | Area (button on the dashboard) | What it configures |
 |---|---|
-| **Ticket channel** (`/setup tickets`) | Where ticket threads are created, and the reports channel — **required for tickets** |
 | **Categories** (`/ticket category manage`) | The ticket types members can open |
-| **Panels** (`/ticket panel manage`) | The messages members click to open a ticket |
+| **Panels** (`/ticket panel manage`) | The messages members click to open a ticket — tickets open in the panel's channel, **required for tickets** |
+| **Reports channel** (`/setup tickets`) | Where reported messages and users appear for staff review |
 | **Mod staff** (`/setup mod`) | Mod staff roles and DM notification toggles (warn/timeout/kick/ban) |
 | **Appeals & concerns** (`/setup appeals`) | Appeals channel, concerns channel, and the appeal waiting period |
 | **Anti-raid** (`/setup raid`) | Raid detection sensitivity (Low / Medium / High) and slowmode strength |
@@ -190,25 +197,35 @@ All settings are per-guild and save immediately when you change them in the form
 Run **`/ticket category manage`** (or the **Categories** button on the dashboard) to
 open the category hub:
 
-- **Create Category** — a short two-step wizard: step 1 captures the name, emoji, and
-  description; step 2 (a single modal with a colour **dropdown** and behaviour
-  **checkboxes**) sets the accent colour, welcome message, thread-name pattern, and
-  toggles. You can skip step 2 and tweak everything later.
-- **Pick a category** from the dropdown to configure it. The form holds everything in
-  one place: basic info (label, emoji, colour, description), the welcome message,
-  thread-name pattern, ping roles, staff-alert channel, behaviour toggles, limits
-  (max open per user — set **0 for unlimited** — and auto-close), the **intake-form
-  questions**, and a **Delete** button (with confirmation).
+- **Create Category** — one modal capturing the name, emoji, description, and accent
+  colour (a **dropdown**). Submitting lands you straight on the category's config
+  panel, where everything else lives.
+- Each category in the list has an inline **Configure** button (with very long lists
+  this collapses into a dropdown).
 
-**Intake form questions** (up to 5) support four types, chosen with a dropdown when you
-add one:
+The config panel is split into three tabs, swapped in place:
+
+- **Overview** — basic info (label, emoji, colour, description — the same modal as
+  Create, prefilled), the welcome message, the thread-name pattern, and **Delete**
+  (with confirmation). Each row shows the current value next to its **Edit** button.
+- **Behaviour** — **Staff Roles** (pinged once and pulled into each new ticket
+  thread), the staff-alert channel, and limits (max open per user — set **0 for
+  unlimited** — and auto-close).
+- **Questions** — the intake-form questions (up to 5). There's no on/off switch:
+  the form shows whenever the category has questions, and is skipped when it has
+  none.
+
+**Intake form questions** support four types, chosen from the **Add a question**
+dropdown on the Questions tab:
 
 - **Short answer** / **Paragraph** — free text.
 - **Dropdown** — the member picks one of your choices.
 - **Checkboxes** — the member picks any number of your choices.
 
-Adding a dropdown/checkbox question is a two-step flow: first the label, type, and
-whether it's required; then a second step to list the choices (one per line).
+Picking a type opens a single modal with everything the question needs — its label,
+whether it's required, an optional placeholder hint, and (for dropdown/checkbox
+questions) the choices, one per line. Every question has an inline **Edit** button to
+reopen the same modal prefilled.
 
 ### Ticket Panels
 

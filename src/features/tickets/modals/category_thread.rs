@@ -28,19 +28,11 @@ pub async fn handle(
         .to_string();
 
     if let Err(msg) = validate_thread_pattern(&pattern) {
-        mi.create_response(
-            &ctx.http,
-            serenity::CreateInteractionResponse::Message(
-                serenity::CreateInteractionResponseMessage::new()
-                    .ephemeral(true)
-                    .content(format!("{} Nothing was changed.", msg)),
-            ),
-        )
-        .await?;
+        crate::util::respond_ephemeral_modal(ctx, mi, &format!("{} Nothing was changed.", msg)).await;
         return Ok(());
     }
 
     data.db.set_ticket_type_thread_pattern(type_id, &pattern).await?;
-    refresh_category_form(ctx, data, mi, type_id).await?;
+    refresh_category_form(ctx, data, mi, type_id, super::super::view::ConfigTab::Overview).await?;
     Ok(())
 }

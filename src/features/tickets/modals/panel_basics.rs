@@ -4,10 +4,10 @@ use poise::serenity_prelude as serenity;
 
 use crate::context::BotData;
 use crate::ids::parse_panel_basics_modal;
-use crate::ui;
-use crate::util::{modal_field, parse_hex_color};
+use crate::util::{modal_field, parse_hex_color, respond_ephemeral_modal};
 
-use super::super::view::{build_panel_config_form, build_panel_cv2};
+use super::super::components::panel_config::show_config_form;
+use super::super::service::republish_panel;
 
 /// `m:pnl:basics:{panel_id}` — edit a panel's title / description / colour, then
 /// re-render the configure form (and the live panel message, if published).
@@ -29,31 +29,35 @@ pub async fn handle(
     let title = modal_field(&mi.data.components, "pnl_title").unwrap_or("").trim().to_string();
     let title = if title.is_empty() { panel.title.clone() } else { title };
     let description = modal_field(&mi.data.components, "pnl_desc").filter(|s| !s.is_empty()).map(str::to_string);
-    let color = modal_field(&mi.data.components, "pnl_color")
-        .and_then(parse_hex_color)
-        .unwrap_or_else(|| panel.color.clone());
+    // Empty = keep the current colour; a non-empty but unparseable value is a
+    // mistake worth surfacing rather than silently ignoring.
+    let color_raw = modal_field(&mi.data.components, "pnl_color").unwrap_or("").trim().to_string();
+    let color = if color_raw.is_empty() {
+        panel.color.clone()
+    } else {
+        match parse_hex_color(&color_raw) {
+            Some(c) => c,
+            None => {
+                respond_ephemeral_modal(
+                    ctx,
+                    mi,
+                    "That colour isn't a valid hex code — use something like `5865F2`.",
+                )
+                .await;
+                return Ok(());
+            }
+        }
+    };
 
     data.db
         .update_panel(panel_id, &title, description.as_deref(), &color, &panel.layout)
         .await?;
 
-    // Re-render the live message if this panel is already published.
-    let updated = data.db.get_panel(panel_id).await?;
-    if let Some(p) = &updated {
-        if let (Some(mid), Some(cid)) = (p.message_id.as_ref(), p.channel_id.as_ref()) {
-            let types = data.db.get_panel_types(panel_id).await?;
-            if !types.is_empty() {
-                if let (Ok(c), Ok(m)) = (cid.parse::<u64>(), mid.parse::<u64>()) {
-                    let tree = build_panel_cv2(p, &types);
-                    ui::edit(&ctx.http, serenity::ChannelId::new(c), serenity::MessageId::new(m), &tree).await.ok();
-                }
-            }
-        }
-    }
+    // Re-render the live message if this panel is already published. The updated
+    // fields are in hand, so no re-fetch is needed.
+    let panel = crate::db::Panel { title, description, color, ..panel };
+    republish_panel(&ctx.http, data, &panel).await;
 
-    let all_cats = data.db.get_ticket_types(&g).await?;
-    let linked: Vec<i64> = data.db.get_panel_types(panel_id).await?.iter().map(|t| t.id).collect();
-    let panel = updated.unwrap_or(panel);
-    ui::update(&ctx.http, mi.id, &mi.token, &build_panel_config_form(&panel, &all_cats, &linked)).await?;
+    show_config_form(&ctx.http, data, mi.id, &mi.token, panel_id, &g).await?;
     Ok(())
 }

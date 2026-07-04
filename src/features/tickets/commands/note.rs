@@ -1,6 +1,4 @@
-use poise::serenity_prelude as serenity;
-
-use crate::context::{colours, Context, Error};
+use crate::context::{Context, Error};
 use crate::permissions::require_mod_staff;
 
 /// Add a private staff note to this ticket.
@@ -22,12 +20,9 @@ pub async fn note(
     ctx.data().db.add_note(ticket.id, &ctx.author().id.to_string(), &content).await?;
 
     ctx.send(
-        poise::CreateReply::default().ephemeral(true).embed(
-            serenity::CreateEmbed::new()
-                .colour(colours::GREY)
-                .title("📝 Staff Note Added")
-                .description(&content),
-        ),
+        poise::CreateReply::default()
+            .ephemeral(true)
+            .content(format!("📝 **Staff note added.**\n{}", content)),
     )
     .await?;
     Ok(())

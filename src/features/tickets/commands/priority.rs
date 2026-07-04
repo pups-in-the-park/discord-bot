@@ -1,6 +1,4 @@
-use poise::serenity_prelude as serenity;
-
-use crate::context::{colours, Context, Error, Priority};
+use crate::context::{Context, Error, Priority};
 use crate::permissions::require_mod_staff;
 
 #[derive(Debug, poise::ChoiceParameter)]
@@ -41,12 +39,16 @@ pub async fn priority(
     ctx.data().db.set_priority(ticket.id, p.as_str()).await?;
 
     ctx.send(
-        poise::CreateReply::default().embed(
-            serenity::CreateEmbed::new()
-                .colour(colours::BLURPLE)
-                .description(format!("{} Priority set to **{}**", p.emoji(), p.label())),
-        ),
+        poise::CreateReply::default()
+            .content(format!("{} Priority set to **{}**.", p.emoji(), p.label())),
     )
     .await?;
+
+    // Reflect the new priority on the in-thread ticket card.
+    if let Ok(Some(fresh)) = ctx.data().db.get_ticket_by_id(ticket.id).await {
+        super::super::service::refresh_ticket_card(&ctx.serenity_context().http, &ctx.data(), &fresh)
+            .await
+            .ok();
+    }
     Ok(())
 }

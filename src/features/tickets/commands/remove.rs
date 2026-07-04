@@ -1,6 +1,6 @@
 use poise::serenity_prelude as serenity;
 
-use crate::context::{colours, Context, Error};
+use crate::context::{Context, Error};
 
 /// Remove a user from this ticket.
 #[poise::command(slash_command, guild_only)]
@@ -34,11 +34,8 @@ pub async fn remove(
     ctx.data().db.remove_member(ticket.id, &user.id.to_string()).await?;
 
     ctx.send(
-        poise::CreateReply::default().embed(
-            serenity::CreateEmbed::new()
-                .colour(colours::RED)
-                .description(format!("<@{}> has been removed from the ticket.", user.id)),
-        ),
+        poise::CreateReply::default()
+            .content(format!("➖ <@{}> has been removed from the ticket.", user.id)),
     )
     .await?;
     Ok(())

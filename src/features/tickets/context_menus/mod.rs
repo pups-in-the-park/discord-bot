@@ -28,11 +28,15 @@ pub(crate) async fn open_ticket_for_user(
     }
 
     if active.len() == 1 {
-        // Skip the selector and open the form modal directly.
+        // Skip the selector and open the form modal directly — or the ticket
+        // itself when the category has no renderable intake questions (an empty
+        // modal is rejected by Discord).
         let modal_id = cid_ctx_open_modal(active[0].id, target_id.get());
         let form_fields = ctx.data().db.get_form_fields(active[0].id).await?;
-        let modal = build_open_modal(modal_id, &active[0], &form_fields);
-        crate::util::modal_response(ctx, modal).await?;
+        match build_open_modal(modal_id, &active[0], &form_fields) {
+            Some(modal) => crate::util::modal_response(ctx, modal).await?,
+            None => open_without_form(ctx, &active[0], target_id).await?,
+        }
     } else {
         // Send an ephemeral select-menu so staff can pick the category.
         let options: Vec<serenity::CreateSelectMenuOption> = active
@@ -62,5 +66,43 @@ pub(crate) async fn open_ticket_for_user(
         )
         .await?;
     }
+    Ok(())
+}
+
+/// Open a ticket for `target_id` with no intake modal (the category has no
+/// renderable questions).
+async fn open_without_form(
+    ctx: Context<'_>,
+    ticket_type: &crate::db::TicketType,
+    target_id: serenity::UserId,
+) -> Result<(), Error> {
+    let guild_id = ctx.guild_id().unwrap();
+    let data = ctx.data();
+
+    // No panel interaction to inherit a channel from, so the ticket opens in
+    // the category's panel's channel.
+    let parent_ch = super::service::resolve_parent_for_type(&data, ticket_type)
+        .await
+        .map_err(|e| Error::user(e.to_string()))?;
+
+    // Thread creation + card can exceed the 3-second window.
+    ctx.defer_ephemeral().await?;
+
+    let opened = super::service::open_ticket_no_form(
+        ctx.serenity_context(),
+        &data,
+        guild_id,
+        ticket_type,
+        target_id,
+        parent_ch,
+    )
+    .await?;
+
+    ctx.send(
+        poise::CreateReply::default()
+            .ephemeral(true)
+            .content(format!("Ticket opened for <@{}>: <#{}>", target_id, opened.thread.id)),
+    )
+    .await?;
     Ok(())
 }

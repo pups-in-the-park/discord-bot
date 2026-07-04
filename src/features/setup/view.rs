@@ -12,15 +12,13 @@ use crate::ui::{
     Section, SelectOption, Spacing, StringSelect,
 };
 
-/// Map a raid `join_threshold` to its human sensitivity label (mirror of the
-/// presets the raid form writes).
+/// Map a raid `join_threshold` to its human sensitivity label, derived from the
+/// raid feature's own presets so the dashboard can't drift from what's stored.
 fn raid_sensitivity_label(join_threshold: f64) -> &'static str {
-    if join_threshold >= 7.0 {
-        "Low"
-    } else if join_threshold <= 4.0 {
-        "High"
-    } else {
-        "Medium"
+    match crate::features::raid::sensitivity_key(join_threshold) {
+        "low" => "Low",
+        "high" => "High",
+        _ => "Medium",
     }
 }
 
@@ -44,25 +42,26 @@ pub fn build_setup_hub(
 
     let tick = |ok: bool| if ok { "✅" } else { "⚠️" };
 
-    // Tickets: parent channel is the make-or-break setting.
-    let parent_set = guild.ticket_channel_id.is_some();
-    let parent_body = match &guild.ticket_channel_id {
-        Some(id) => format!("**📂 Ticket channel** ✅ · threads open in <#{}>", id),
-        None => "**📂 Ticket channel** ⚠️ · not set — **tickets can't open until this is set**".to_string(),
-    };
-    let parent_style = if parent_set { ButtonStyle::Secondary } else { ButtonStyle::Primary };
-
     let cats_body = format!(
         "**🗂️ Categories** {} · {} defined",
         tick(num_categories > 0),
         num_categories
     );
-    let panels_body = format!(
-        "**📋 Panels** {} · {} published of {}",
-        tick(num_published_panels > 0),
-        num_published_panels,
-        num_panels
-    );
+    // Tickets open in the channel their panel is published to, so a published
+    // panel is the make-or-break setting.
+    let panels_ready = num_published_panels > 0;
+    let panels_body = if panels_ready {
+        format!(
+            "**📋 Panels** ✅ · {} published of {}",
+            num_published_panels, num_panels
+        )
+    } else {
+        format!(
+            "**📋 Panels** ⚠️ · {} published of {} — **tickets can't open until a panel is published**",
+            num_published_panels, num_panels
+        )
+    };
+    let panels_style = if panels_ready { ButtonStyle::Secondary } else { ButtonStyle::Primary };
 
     // Moderation & safety.
     let staff_n = modc.staff_roles().len();
@@ -78,6 +77,10 @@ pub fn build_setup_hub(
         if guild.appeals_channel_id.is_some() { "set" } else { "unset" },
         if guild.concerns_channel_id.is_some() { "set" } else { "unset" },
     );
+    let reports_body = match &guild.reports_channel_id {
+        Some(id) => format!("**🚨 Reports channel** ✅ · reports go to <#{}>", id),
+        None => "**🚨 Reports channel** ⚠️ · not set".to_string(),
+    };
     let raid_body = format!(
         "**🛡️ Anti-raid** ✅ · sensitivity **{}**",
         raid_sensitivity_label(raid.join_threshold)
@@ -105,13 +108,13 @@ pub fn build_setup_hub(
             "## 🛠️ Server Setup\n-# Configure pip for your server. ✅ ready · ⚠️ needs attention. Use the buttons to jump into each area.",
         ),
         ui::separator(true, Spacing::Small),
-        ui::text("### 🎫 Ticket system\n-# Set these up in order."),
-        row(parent_body, CID_SETUP_TICKET, if parent_set { "Edit" } else { "Set up" }, parent_style),
+        ui::text("### 🎫 Ticket system\n-# Set these up in order. Tickets open in the channel each panel is published to."),
         row(cats_body, CID_CAT_HUB_OPEN, "Manage", ButtonStyle::Secondary),
-        row(panels_body, CID_PANEL_HUB_OPEN, "Manage", ButtonStyle::Secondary),
+        row(panels_body, CID_PANEL_HUB_OPEN, "Manage", panels_style),
         ui::separator(false, Spacing::Small),
         ui::text("### 🛡️ Moderation & safety"),
         row(staff_body, CID_SETUP_MOD_STAFF, "Configure", ButtonStyle::Secondary),
+        row(reports_body, CID_SETUP_TICKET, "Configure", ButtonStyle::Secondary),
         row(appeals_body, CID_SETUP_APPEALS, "Configure", ButtonStyle::Secondary),
         row(raid_body, CID_SETUP_RAID, "Configure", ButtonStyle::Secondary),
         row(slow_body, CID_SETUP_SLOWMODE, "Configure", ButtonStyle::Secondary),
@@ -158,14 +161,9 @@ pub fn build_setup_log_form(cfg: &GuildConfig) -> Vec<Component> {
 }
 
 pub fn build_setup_ticket_form(cfg: &GuildConfig) -> Vec<Component> {
-    let parent = ChannelSelect::new("setup:ticket:channel", &[ChannelType::Text, ChannelType::Announcement])
-        .placeholder("Select a channel…")
-        .default(cfg.ticket_channel_id.as_deref());
     vec![Container::new(vec![
-        ui::text("## 🎫 Ticket Settings\n-# Configure where ticket threads are created and where reports appear."),
+        ui::text("## 🚨 Reports\n-# Configure where reports appear. Ticket threads open in the channel each panel is published to."),
         ui::separator(false, Spacing::Small),
-        ui::text("**📂 Ticket Parent Channel** · New ticket threads are created inside this channel."),
-        ui::action_row(vec![parent.into()]),
         ui::text("**🚨 Reports Channel** · Where reported messages and users appear for staff review."),
         ui::action_row(vec![channel_pick("setup:ticket:reports", cfg.reports_channel_id.as_deref())]),
     ])
@@ -222,13 +220,7 @@ pub fn build_setup_appeals_form(guild_cfg: &GuildConfig, cooldown_days: i64) -> 
 }
 
 pub fn build_setup_raid_form(raid_cfg: &RaidConfig) -> Vec<Component> {
-    let sensitivity = if raid_cfg.join_threshold >= 7.0 {
-        "low"
-    } else if raid_cfg.join_threshold <= 4.0 {
-        "high"
-    } else {
-        "medium"
-    };
+    let sensitivity = crate::features::raid::sensitivity_key(raid_cfg.join_threshold);
     let select = StringSelect::new(
         "setup:raid:sensitivity",
         vec![

@@ -3,7 +3,9 @@ use poise::serenity_prelude as serenity;
 use crate::context::{colours, Context, Error};
 use crate::ui::slash_respond;
 
-use super::super::view::{build_category_config_form, build_category_create_modal, build_category_hub};
+use super::super::view::{
+    build_category_basic_modal, build_category_config_form, build_category_hub, ConfigTab,
+};
 
 /// Manage ticket categories.
 #[poise::command(slash_command, guild_only, subcommands("manage", "create", "edit", "delete"))]
@@ -15,15 +17,17 @@ pub async fn category(_ctx: Context<'_>) -> Result<(), Error> {
 #[poise::command(slash_command, guild_only, rename = "manage", default_member_permissions = "MANAGE_GUILD")]
 pub async fn manage(ctx: Context<'_>) -> Result<(), Error> {
     let guild_id = ctx.guild_id().unwrap();
-    let cats = ctx.data().db.get_ticket_types(&guild_id.to_string()).await?;
-    slash_respond(ctx, &build_category_hub(&cats)).await?;
+    let g = guild_id.to_string();
+    let cats = ctx.data().db.get_ticket_types(&g).await?;
+    let counts = ctx.data().db.count_form_fields_by_type(&g).await?;
+    slash_respond(ctx, &build_category_hub(&cats, &counts)).await?;
     Ok(())
 }
 
 /// Quickly create a new ticket category.
 #[poise::command(slash_command, guild_only, rename = "create", default_member_permissions = "MANAGE_GUILD")]
 pub async fn create(ctx: Context<'_>) -> Result<(), Error> {
-    crate::util::modal_response(ctx, build_category_create_modal()).await?;
+    crate::util::modal_response(ctx, build_category_basic_modal(None)).await?;
     Ok(())
 }
 
@@ -45,7 +49,7 @@ pub async fn edit(
 
     let roles = ctx.data().db.get_type_roles(cat.id).await?;
     let fields = ctx.data().db.get_form_fields(cat.id).await?;
-    slash_respond(ctx, &build_category_config_form(&cat, &roles, &fields)).await?;
+    slash_respond(ctx, &build_category_config_form(&cat, &roles, &fields, ConfigTab::Overview)).await?;
     Ok(())
 }
 
@@ -79,6 +83,15 @@ pub async fn delete(
         ),
     )
     .await?;
+
+    // The reply promises the category is removed from panels — refresh the
+    // affected live panels (after responding, to stay within the 3s window).
+    super::super::service::republish_panels_containing(
+        &ctx.serenity_context().http,
+        &ctx.data(),
+        cat.id,
+    )
+    .await;
     Ok(())
 }
 

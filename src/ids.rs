@@ -56,21 +56,21 @@ pub fn parse_ctx_open_modal(id: &str) -> Option<(i64, u64)> {
 
 pub const CID_CLOSE_BTN: &str = "t:close";
 
+/// "Join Ticket" button on the staff-alert card. Adding is idempotent, so the
+/// button doubles as "take me to the ticket" for staff already in the thread.
+pub fn cid_ticket_join(ticket_id: i64) -> String {
+    format!("t:join:{ticket_id}")
+}
+pub fn parse_ticket_join(id: &str) -> Option<i64> {
+    tail_i64(id, "t:join:")
+}
+
 pub fn cid_claim_btn(ticket_id: i64) -> String {
     format!("t:claim:{ticket_id}")
 }
 pub fn parse_claim_btn(id: &str) -> Option<i64> {
     tail_i64(id, "t:claim:")
 }
-
-pub fn cid_confirm_close(ticket_id: i64) -> String {
-    format!("t:cfm:{ticket_id}")
-}
-pub fn parse_confirm_close(id: &str) -> Option<i64> {
-    tail_i64(id, "t:cfm:")
-}
-
-pub const CID_CANCEL_CLOSE: &str = "t:can";
 
 pub fn cid_priority_select(ticket_id: i64) -> String {
     format!("t:pri:{ticket_id}")
@@ -86,41 +86,45 @@ pub fn parse_close_modal(id: &str) -> Option<i64> {
     tail_i64(id, "m:close:")
 }
 
-/// Step 1 of the add-question wizard: capture label + type + required.
-pub fn cid_form_field_type_modal(type_id: i64) -> String {
-    format!("m:ff:type:{type_id}")
+/// Modal creating a new intake question of a chosen style. The style is picked
+/// from a select *before* the modal opens, so one modal collects everything
+/// (label, required, and — for dropdown/checkbox — the choices).
+pub fn cid_form_field_new_modal(type_id: i64, style: &str) -> String {
+    format!("m:ff:new:{type_id}:{style}")
 }
-pub fn parse_form_field_type_modal(id: &str) -> Option<i64> {
-    tail_i64(id, "m:ff:type:")
-}
-
-/// Step 2 of the add-question wizard (select/checkbox only): capture the choices
-/// for an already-created field.
-pub fn cid_form_field_options_modal(field_id: i64) -> String {
-    format!("m:ff:opts:{field_id}")
-}
-pub fn parse_form_field_options_modal(id: &str) -> Option<i64> {
-    tail_i64(id, "m:ff:opts:")
+/// → `(type_id, style)`
+pub fn parse_form_field_new_modal(id: &str) -> Option<(i64, String)> {
+    let rest = id.strip_prefix("m:ff:new:")?;
+    let (a, b) = rest.split_once(':')?;
+    Some((a.parse().ok()?, b.to_string()))
 }
 
-/// Step 2 of the category-creation wizard: appearance & behaviour for a new category.
-pub fn cid_category_step2_modal(cat_id: i64) -> String {
-    format!("m:cat:create2:{cat_id}")
+/// Modal editing an existing intake question (same layout as `m:ff:new`, prefilled).
+pub fn cid_form_field_edit_modal(field_id: i64) -> String {
+    format!("m:ff:edit:{field_id}")
 }
-pub fn parse_category_step2_modal(id: &str) -> Option<i64> {
-    tail_i64(id, "m:cat:create2:")
+pub fn parse_form_field_edit_modal(id: &str) -> Option<i64> {
+    tail_i64(id, "m:ff:edit:")
 }
 
 // ── Category management hub IDs ──────────────────────────────────────────────────
-// The hub is a CV2 surface listing categories (select to configure) plus a Create
-// button. `OPEN` is fired from a fresh surface (e.g. the setup hub quick-link) and
-// responds with a new ephemeral; `BACK`/`SELECT`/`CREATE` live inside the hub
-// ephemeral and update it in place.
+// The hub is a CV2 surface listing categories (inline Configure buttons, or a
+// select fallback when there are too many) plus a Create button. `OPEN` is fired
+// from a fresh surface (e.g. the setup hub quick-link) and responds with a new
+// ephemeral; the rest live inside the hub ephemeral and update it in place.
 
 pub const CID_CAT_HUB_OPEN: &str = "cat:hub:open";
 pub const CID_CAT_HUB_BACK: &str = "cat:hub:back";
 pub const CID_CAT_HUB_CREATE: &str = "cat:hub:create";
 pub const CID_CAT_HUB_SELECT: &str = "cat:hub:sel";
+
+/// Per-category "Configure" button on the hub list.
+pub fn cid_cat_hub_configure(type_id: i64) -> String {
+    format!("cat:hub:sel:{type_id}")
+}
+pub fn parse_cat_hub_configure(id: &str) -> Option<i64> {
+    tail_i64(id, "cat:hub:sel:")
+}
 
 // ── Panel management hub / config IDs ────────────────────────────────────────────
 
@@ -397,8 +401,10 @@ mod tests {
     fn builders_round_trip_through_parsers() {
         assert_eq!(parse_panel_btn(&cid_panel_btn(7)), Some(7));
         assert_eq!(parse_claim_btn(&cid_claim_btn(7)), Some(7));
+        assert_eq!(parse_ticket_join(&cid_ticket_join(7)), Some(7));
         assert_eq!(parse_open_modal(&cid_open_modal(7)), Some(7));
         assert_eq!(parse_ctx_open_modal(&cid_ctx_open_modal(7, 99)), Some((7, 99)));
+        assert_eq!(parse_ctx_type_select(&cid_ctx_type_select(99)), Some(99));
         assert_eq!(parse_appeal_btn(&cid_appeal_btn(3, 50)), Some((3, 50)));
         assert_eq!(parse_appeal_modal(&cid_appeal_modal(3, 50)), Some((3, 50)));
         assert_eq!(parse_appeal_resolve(&cid_appeal_resolve(9, true)), Some((9, true)));
@@ -424,9 +430,12 @@ mod tests {
             parse_concern_modal(&cid_concern_modal("report", 8, 60)),
             Some(("report".to_string(), 8, 60))
         );
-        assert_eq!(parse_form_field_type_modal(&cid_form_field_type_modal(4)), Some(4));
-        assert_eq!(parse_form_field_options_modal(&cid_form_field_options_modal(9)), Some(9));
-        assert_eq!(parse_category_step2_modal(&cid_category_step2_modal(3)), Some(3));
+        assert_eq!(
+            parse_form_field_new_modal(&cid_form_field_new_modal(4, "select")),
+            Some((4, "select".to_string()))
+        );
+        assert_eq!(parse_form_field_edit_modal(&cid_form_field_edit_modal(9)), Some(9));
+        assert_eq!(parse_cat_hub_configure(&cid_cat_hub_configure(3)), Some(3));
         assert_eq!(parse_panel_basics_modal(&cid_panel_basics_modal(12)), Some(12));
         assert_eq!(
             parse_panel_cfg(&cid_panel_cfg(8, "cats")),

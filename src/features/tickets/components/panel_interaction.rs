@@ -6,7 +6,7 @@ use crate::context::BotData;
 use crate::ids::cid_open_modal;
 use crate::util::respond_ephemeral;
 
-use super::super::service::{open_thread, OpenThreadOptions};
+use super::super::service::{open_ticket_no_form, ticket_open_block_reason};
 use super::super::view::build_open_modal;
 
 /// A panel button or select was used to open a ticket. Validates blocklist/limits,
@@ -35,43 +35,22 @@ pub async fn handle(
         .await?
         .ok_or_else(|| anyhow::anyhow!("Ticket type not found"))?;
 
-    // Check blocklist (category-specific, also covered by the `tickets` umbrella).
-    if let Some(block) = data
-        .db
-        .get_active_block(
-            &guild_id.to_string(),
-            &ci.user.id.to_string(),
-            &format!("ticket:{}", ticket_type.name),
-        )
-        .await?
+    // Deactivated category (stale panel button), blocklist, or per-user open
+    // limit. Re-checked at intake-form submit too (modals::open), since this
+    // runs before the modal is shown.
+    if let Some(reason) =
+        ticket_open_block_reason(data, guild_id, ci.user.id, &ticket_type).await?
     {
-        respond_ephemeral(ctx, ci, &crate::features::blocklist::view::blocked_text(&block)).await;
+        respond_ephemeral(ctx, ci, &reason).await;
         return Ok(());
     }
 
-    // Check max open
-    let open_count = data
-        .db
-        .count_open_tickets_for_user(&guild_id.to_string(), &ci.user.id.to_string(), ticket_type_id)
-        .await?;
-    // max_open_per_user of 0 means unlimited.
-    if ticket_type.max_open_per_user > 0 && open_count >= ticket_type.max_open_per_user {
-        respond_ephemeral(
-            ctx,
-            ci,
-            &format!(
-                "You already have {} open ticket(s) of this type. Please wait for them to be resolved.",
-                open_count,
-            ),
-        )
-        .await;
-        return Ok(());
-    }
-
-    // If form, open modal; else open thread directly
-    if ticket_type.has_form {
-        let fields = data.db.get_form_fields(ticket_type_id).await?;
-        let modal = build_open_modal(cid_open_modal(ticket_type_id), &ticket_type, &fields);
+    // The intake form exists exactly when the category has renderable questions:
+    // `build_open_modal` yields no modal for zero questions (or ones that are all
+    // unrenderable, e.g. option-less selects) and we fall through to a direct open.
+    let fields = data.db.get_form_fields(ticket_type_id).await?;
+    let modal = build_open_modal(cid_open_modal(ticket_type_id), &ticket_type, &fields);
+    if let Some(modal) = modal {
         ci.create_response(&ctx.http, serenity::CreateInteractionResponse::Modal(modal))
             .await?;
     } else {
@@ -79,57 +58,25 @@ pub async fn handle(
         ci.create_response(&ctx.http, serenity::CreateInteractionResponse::Acknowledge)
             .await?;
 
-        let guild_cfg = data.db.get_or_create_guild(&guild_id.to_string()).await?;
-        let Some(parent_ch) = guild_cfg
-            .ticket_channel_id
-            .as_ref()
-            .and_then(|s| s.parse::<u64>().ok())
-            .map(serenity::ChannelId::new)
-        else {
-            ctx.http
-                .create_followup_message(
-                    &ci.token,
-                    &serde_json::json!({
-                        "content": "This server's ticket system isn't finished being set up yet. An admin needs to pick a ticket channel in `/setup overview`.",
-                        "flags": 64,
-                    }),
-                    vec![],
+        let followup = |msg: String| {
+            serenity::CreateInteractionResponseFollowup::new().ephemeral(true).content(msg)
+        };
+        // The panel message lives in this channel, so the ticket opens here.
+        let parent_ch = ci.channel_id.expect_channel();
+
+        match open_ticket_no_form(ctx, data, guild_id, &ticket_type, ci.user.id, parent_ch).await {
+            Ok(opened) => {
+                ci.create_followup(
+                    &ctx.http,
+                    followup(format!("Your ticket has been created: <#{}>", opened.thread.id)),
                 )
                 .await
                 .ok();
-            return Ok(());
-        };
-
-        let ticket_number = data.db.next_ticket_number(&guild_id.to_string()).await?;
-        let opened = open_thread(
-            ctx,
-            data,
-            guild_id,
-            OpenThreadOptions {
-                ticket_type: &ticket_type,
-                ticket_number,
-                owner_id: ci.user.id,
-                parent_channel_id: parent_ch,
-                form_responses: None,
-                reported_message_id: None,
-                reported_message_url: None,
-                reported_message_content: None,
-                reported_author_id: None,
-            },
-        )
-        .await?;
-
-        ctx.http
-            .create_followup_message(
-                &ci.token,
-                &serde_json::json!({
-                    "content": format!("Your ticket has been created: <#{}>", opened.thread.id),
-                    "flags": 64,
-                }),
-                vec![],
-            )
-            .await
-            .ok();
+            }
+            Err(e) => {
+                ci.create_followup(&ctx.http, followup(e.to_string())).await.ok();
+            }
+        }
     }
     Ok(())
 }

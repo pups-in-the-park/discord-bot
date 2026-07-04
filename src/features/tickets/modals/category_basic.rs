@@ -3,11 +3,14 @@ use std::sync::Arc;
 use poise::serenity_prelude as serenity;
 
 use crate::context::BotData;
-use crate::util::{modal_field, parse_hex_color};
+use crate::ui::read_multi_select;
+use crate::util::{modal_field, parse_hex_color, respond_ephemeral_modal};
 
+use super::super::view::ConfigTab;
 use super::refresh_category_form;
 
-/// `m:cat:basic:{type_id}` — edit label, emoji, color, description.
+/// `m:cat:basic:{type_id}` — the shared basic-info modal: label, emoji,
+/// description, and the accent-colour dropdown.
 pub async fn handle(
     ctx: &serenity::Context,
     data: &Arc<BotData>,
@@ -22,9 +25,14 @@ pub async fn handle(
         .ok_or_else(|| anyhow::anyhow!("Invalid category ID"))?;
 
     let label = modal_field(&mi.data.components, "cat_label").unwrap_or("").trim().to_string();
+    // Discord blocks an empty required field but not a whitespace-only one; guard
+    // it here too so we never persist a blank button/menu label (as create does).
+    if label.is_empty() {
+        respond_ephemeral_modal(ctx, mi, "A name is required.").await;
+        return Ok(());
+    }
     let emoji = modal_field(&mi.data.components, "cat_emoji").filter(|s| !s.is_empty()).map(str::to_string);
-    let color_input = modal_field(&mi.data.components, "cat_color").filter(|s| !s.is_empty());
-    let desc = modal_field(&mi.data.components, "cat_desc").filter(|s| !s.is_empty()).map(str::to_string);
+    let desc = modal_field(&mi.data.components, "cat_description").filter(|s| !s.is_empty()).map(str::to_string);
 
     // Read current values so we don't clobber the welcome message or a good colour.
     let current = data
@@ -33,30 +41,15 @@ pub async fn handle(
         .await?
         .ok_or_else(|| anyhow::anyhow!("Category not found"))?;
 
-    // Validate the colour; on a typo, keep the existing colour and tell the user.
-    let color = match color_input {
-        Some(raw) => match parse_hex_color(raw) {
-            Some(valid) => valid,
-            None => {
-                mi.create_response(
-                    &ctx.http,
-                    serenity::CreateInteractionResponse::Message(
-                        serenity::CreateInteractionResponseMessage::new()
-                            .ephemeral(true)
-                            .content("Couldn't read that colour — use a 6-digit hex like `5865F2`. Nothing was changed."),
-                    ),
-                )
-                .await?;
-                return Ok(());
-            }
-        },
-        None => current.color.clone(),
-    };
+    let color = read_multi_select(&mi.data.components, "cat_color")
+        .first()
+        .and_then(|h| parse_hex_color(h))
+        .unwrap_or_else(|| current.color.clone());
 
     data.db
         .update_ticket_type(type_id, &label, emoji.as_deref(), desc.as_deref(), &color, current.welcome_message.as_deref())
         .await?;
 
-    refresh_category_form(ctx, data, mi, type_id).await?;
+    refresh_category_form(ctx, data, mi, type_id, ConfigTab::Overview).await?;
     Ok(())
 }

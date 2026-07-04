@@ -17,6 +17,23 @@ pub async fn handle(
         .await?
         .ok_or_else(|| anyhow::anyhow!("Not a ticket thread"))?;
 
+    // Pre-check so an unauthorized user gets a clear message instead of a modal
+    // that fails on submit. The modal handler re-checks authoritatively.
+    let is_owner = ticket.owner_id == ci.user.id.to_string();
+    let allowed = match ci.guild_id {
+        Some(gid) => is_owner || crate::permissions::is_mod_staff(ctx, data, gid, ci.user.id).await,
+        None => is_owner,
+    };
+    if !allowed {
+        crate::util::respond_ephemeral(
+            ctx,
+            ci,
+            "Only staff or the ticket owner can close this ticket.",
+        )
+        .await;
+        return Ok(());
+    }
+
     ci.create_response(
         &ctx.http,
         serenity::CreateInteractionResponse::Modal(

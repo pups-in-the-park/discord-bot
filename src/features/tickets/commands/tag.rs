@@ -30,11 +30,9 @@ pub async fn tag_add(
     ctx.data().db.add_tag(ticket.id, &tag, &ctx.author().id.to_string()).await?;
 
     ctx.send(
-        poise::CreateReply::default().ephemeral(true).embed(
-            serenity::CreateEmbed::new()
-                .colour(colours::GREEN)
-                .description(format!("Tag `{}` added.", tag)),
-        ),
+        poise::CreateReply::default()
+            .ephemeral(true)
+            .content(format!("🏷️ Tag `{}` added.", tag)),
     )
     .await?;
     Ok(())
@@ -61,11 +59,9 @@ pub async fn tag_remove(
     ctx.data().db.remove_tag(ticket.id, &tag).await?;
 
     ctx.send(
-        poise::CreateReply::default().ephemeral(true).embed(
-            serenity::CreateEmbed::new()
-                .colour(colours::GREEN)
-                .description(format!("Tag `{}` removed.", tag)),
-        ),
+        poise::CreateReply::default()
+            .ephemeral(true)
+            .content(format!("🏷️ Tag `{}` removed.", tag)),
     )
     .await?;
     Ok(())

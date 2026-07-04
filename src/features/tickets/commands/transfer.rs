@@ -1,6 +1,4 @@
-use poise::serenity_prelude as serenity;
-
-use crate::context::{colours, Context, Error};
+use crate::context::{Context, Error};
 use crate::permissions::require_mod_staff;
 
 /// Transfer this ticket to a different category.
@@ -32,11 +30,8 @@ pub async fn transfer(
     ctx.data().db.transfer_ticket(ticket.id, new_type.id).await?;
 
     ctx.send(
-        poise::CreateReply::default().embed(
-            serenity::CreateEmbed::new()
-                .colour(colours::BLURPLE)
-                .description(format!("Ticket transferred to **{}**.", new_type.label)),
-        ),
+        poise::CreateReply::default()
+            .content(format!("🔀 Ticket transferred to **{}**.", new_type.label)),
     )
     .await?;
     Ok(())

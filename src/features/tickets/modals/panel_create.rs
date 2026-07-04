@@ -3,10 +3,9 @@ use std::sync::Arc;
 use poise::serenity_prelude as serenity;
 
 use crate::context::BotData;
-use crate::ui;
-use crate::util::{modal_field, parse_hex_color};
+use crate::util::{modal_field, parse_hex_color, respond_ephemeral_modal};
 
-use super::super::view::build_panel_config_form;
+use super::super::components::panel_config::show_config_form;
 
 /// `m:pnl:create` — create a new panel, then open its configure form in place.
 pub async fn handle(
@@ -26,15 +25,7 @@ pub async fn handle(
         .unwrap_or_else(|| "5865F2".to_string());
 
     if title.is_empty() {
-        mi.create_response(
-            &ctx.http,
-            serenity::CreateInteractionResponse::Message(
-                serenity::CreateInteractionResponseMessage::new()
-                    .ephemeral(true)
-                    .content("A title is required to create a panel."),
-            ),
-        )
-        .await?;
+        respond_ephemeral_modal(ctx, mi, "A title is required to create a panel.").await;
         return Ok(());
     }
 
@@ -43,7 +34,6 @@ pub async fn handle(
         .create_panel(&g, &title, description.as_deref(), &color, "buttons")
         .await?;
 
-    let all_cats = data.db.get_ticket_types(&g).await?;
-    ui::update(&ctx.http, mi.id, &mi.token, &build_panel_config_form(&panel, &all_cats, &[])).await?;
+    show_config_form(&ctx.http, data, mi.id, &mi.token, panel.id, &g).await?;
     Ok(())
 }

@@ -1,6 +1,4 @@
-use poise::serenity_prelude as serenity;
-
-use crate::context::{colours, Context, Error};
+use crate::context::{Context, Error};
 use crate::permissions::require_mod_staff;
 
 /// Release your claim on this ticket.
@@ -22,13 +20,13 @@ pub async fn unclaim(ctx: Context<'_>) -> Result<(), Error> {
 
     ctx.data().db.unclaim_ticket(ticket.id).await?;
 
-    ctx.send(
-        poise::CreateReply::default().embed(
-            serenity::CreateEmbed::new()
-                .colour(colours::GREY)
-                .description("✋ Ticket unclaimed."),
-        ),
-    )
-    .await?;
+    ctx.send(poise::CreateReply::default().content("✋ Ticket unclaimed.")).await?;
+
+    // Re-enable the Claim button on the in-thread ticket card.
+    if let Ok(Some(fresh)) = ctx.data().db.get_ticket_by_id(ticket.id).await {
+        super::super::service::refresh_ticket_card(&ctx.serenity_context().http, &ctx.data(), &fresh)
+            .await
+            .ok();
+    }
     Ok(())
 }

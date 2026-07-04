@@ -4,8 +4,11 @@ use poise::serenity_prelude as serenity;
 
 use crate::context::BotData;
 use crate::ids::parse_open_modal;
+use crate::util::respond_ephemeral_modal;
 
-use super::super::service::{collect_form_responses, open_thread, OpenThreadOptions};
+use super::super::service::{
+    collect_form_responses, open_thread, ticket_open_block_reason, OpenThreadOptions,
+};
 
 /// Intake-form modal submitted (`m:open:{type_id}`): create the ticket thread.
 pub async fn handle(
@@ -25,19 +28,22 @@ pub async fn handle(
         .await?
         .ok_or_else(|| anyhow::anyhow!("Ticket type not found"))?;
 
+    // The panel button check ran before this modal opened, so re-check here:
+    // otherwise rapidly re-clicking the button (or a block added meanwhile) could
+    // submit several forms and bypass the per-user limit / blocklist.
+    if let Some(reason) = ticket_open_block_reason(data, guild_id, mi.user.id, &ticket_type).await? {
+        respond_ephemeral_modal(ctx, mi, &reason).await;
+        return Ok(());
+    }
+
     let fields = data.db.get_form_fields(ticket_type_id).await?;
     let responses = collect_form_responses(&mi.data.components, &fields);
 
-    let guild_cfg = data.db.get_or_create_guild(&guild_id.to_string()).await?;
-    let parent_ch = guild_cfg
-        .ticket_channel_id
-        .as_ref()
-        .and_then(|s| s.parse::<u64>().ok())
-        .map(serenity::ChannelId::new)
-        .ok_or_else(|| anyhow::anyhow!("Ticket channel not configured"))?;
+    // The modal was submitted from the panel message, so its channel is the
+    // panel's channel — the ticket opens there.
+    let parent_ch = mi.channel_id.expect_channel();
 
-    // Creating the thread + card + auto-adding staff (which can paginate the whole
-    // member list) far exceeds the 3-second window — acknowledge first.
+    // Creating the thread + card can exceed the 3-second window — acknowledge first.
     mi.create_response(
         &ctx.http,
         serenity::CreateInteractionResponse::Defer(
@@ -63,13 +69,18 @@ pub async fn handle(
             reported_author_id: None,
         },
     )
-    .await?;
+    .await;
 
+    // Surface open_thread's actionable message (e.g. a missing permission) rather
+    // than letting `?` replace it with a generic dispatch error. We've deferred,
+    // so respond via follow-up.
+    let content = match opened {
+        Ok(opened) => format!("Your ticket has been created: <#{}>", opened.thread.id),
+        Err(e) => e.to_string(),
+    };
     mi.create_followup(
         &ctx.http,
-        serenity::CreateInteractionResponseFollowup::new()
-            .ephemeral(true)
-            .content(format!("Your ticket has been created: <#{}>", opened.thread.id)),
+        serenity::CreateInteractionResponseFollowup::new().ephemeral(true).content(content),
     )
     .await?;
     Ok(())

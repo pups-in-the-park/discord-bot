@@ -18,7 +18,6 @@ pub struct GuildConfig {
     pub mod_log_channel_id: Option<String>,
     pub chat_log_channel_id: Option<String>,
     pub ticket_log_channel_id: Option<String>,
-    pub ticket_channel_id: Option<String>,
     pub reports_channel_id: Option<String>,
     pub appeals_channel_id: Option<String>,
     pub concerns_channel_id: Option<String>,
@@ -36,23 +35,11 @@ pub struct TicketType {
     pub description: Option<String>,
     pub color: String,
     pub thread_name_pattern: String,
-    pub has_form: bool,
     pub max_open_per_user: i64,
     pub auto_close_hours: Option<i64>,
-    pub ping_roles: Option<String>,
     pub welcome_message: Option<String>,
-    pub auto_add_staff: bool,
     pub staff_alert_channel_id: Option<String>,
     pub active: bool,
-}
-
-impl TicketType {
-    pub fn ping_role_ids(&self) -> Vec<String> {
-        self.ping_roles
-            .as_ref()
-            .and_then(|j| serde_json::from_str(j).ok())
-            .unwrap_or_default()
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -135,6 +122,10 @@ pub struct Ticket {
     pub reported_message_url: Option<String>,
     pub reported_message_content: Option<String>,
     pub reported_author_id: Option<String>,
+    /// Message id of the in-thread CV2 ticket card, so claim/priority changes can
+    /// re-render it. `None` for tickets opened before the column existed (or if
+    /// posting the card failed).
+    pub card_message_id: Option<String>,
     pub created_at: String,
     pub closed_at: Option<String>,
     pub last_activity_at: String,
@@ -339,7 +330,7 @@ impl Database {
 
         let row = sqlx::query(
             "SELECT guild_id,log_channel_id,mod_log_channel_id,chat_log_channel_id,
-             ticket_log_channel_id,ticket_channel_id,reports_channel_id,appeals_channel_id,
+             ticket_log_channel_id,reports_channel_id,appeals_channel_id,
              concerns_channel_id,report_type_id,ticket_count
              FROM guild_config WHERE guild_id=?",
         )
@@ -353,7 +344,6 @@ impl Database {
             mod_log_channel_id: row.get("mod_log_channel_id"),
             chat_log_channel_id: row.get("chat_log_channel_id"),
             ticket_log_channel_id: row.get("ticket_log_channel_id"),
-            ticket_channel_id: row.get("ticket_channel_id"),
             reports_channel_id: row.get("reports_channel_id"),
             appeals_channel_id: row.get("appeals_channel_id"),
             concerns_channel_id: row.get("concerns_channel_id"),
@@ -386,16 +376,6 @@ impl Database {
         .bind(guild_id)
         .execute(&self.pool)
         .await?;
-        Ok(())
-    }
-
-    pub async fn set_ticket_channel(&self, guild_id: &str, channel_id: Option<&str>) -> Result<()> {
-        self.get_or_create_guild(guild_id).await?;
-        sqlx::query("UPDATE guild_config SET ticket_channel_id=? WHERE guild_id=?")
-            .bind(channel_id)
-            .bind(guild_id)
-            .execute(&self.pool)
-            .await?;
         Ok(())
     }
 
@@ -469,14 +449,14 @@ impl Database {
 
     pub async fn next_ticket_number(&self, guild_id: &str) -> Result<i64> {
         self.get_or_create_guild(guild_id).await?;
-        sqlx::query("UPDATE guild_config SET ticket_count=ticket_count+1 WHERE guild_id=?")
-            .bind(guild_id)
-            .execute(&self.pool)
-            .await?;
-        let n: i64 = sqlx::query_scalar("SELECT ticket_count FROM guild_config WHERE guild_id=?")
-            .bind(guild_id)
-            .fetch_one(&self.pool)
-            .await?;
+        // Increment and read back in one atomic statement — a separate UPDATE then
+        // SELECT lets two concurrent opens read the same counter and collide.
+        let n: i64 = sqlx::query_scalar(
+            "UPDATE guild_config SET ticket_count=ticket_count+1 WHERE guild_id=? RETURNING ticket_count",
+        )
+        .bind(guild_id)
+        .fetch_one(&self.pool)
+        .await?;
         Ok(n)
     }
 
@@ -492,21 +472,21 @@ impl Database {
             description: r.get("description"),
             color: r.get("color"),
             thread_name_pattern: r.get("thread_name_pattern"),
-            has_form: r.get::<i64, _>("has_form") != 0,
             max_open_per_user: r.get("max_open_per_user"),
             auto_close_hours: r.get("auto_close_hours"),
-            ping_roles: r.get("ping_roles"),
             welcome_message: r.get("welcome_message"),
-            auto_add_staff: r.get::<i64, _>("auto_add_staff") != 0,
             staff_alert_channel_id: r.get("staff_alert_channel_id"),
             active: r.get::<i64, _>("active") != 0,
         }
     }
 
+    // The `has_form`, `ping_roles`, and `auto_add_staff` columns still exist in the
+    // schema but are dormant: staff roles are always mentioned in new threads, and
+    // the intake form is active exactly when the category has questions.
     const TICKET_TYPE_COLS: &'static str =
         "id,guild_id,name,label,emoji,description,color,thread_name_pattern,
-         has_form,max_open_per_user,auto_close_hours,ping_roles,
-         welcome_message,auto_add_staff,staff_alert_channel_id,active";
+         max_open_per_user,auto_close_hours,
+         welcome_message,staff_alert_channel_id,active";
 
     pub async fn create_ticket_type(
         &self,
@@ -522,8 +502,8 @@ impl Database {
             "INSERT INTO ticket_types (guild_id,name,label,emoji,description,color,welcome_message)
              VALUES (?,?,?,?,?,?,?)
              RETURNING id,guild_id,name,label,emoji,description,color,thread_name_pattern,
-                       has_form,max_open_per_user,auto_close_hours,ping_roles,
-                       welcome_message,auto_add_staff,staff_alert_channel_id,active",
+                       max_open_per_user,auto_close_hours,
+                       welcome_message,staff_alert_channel_id,active",
         )
         .bind(guild_id)
         .bind(name)
@@ -540,8 +520,8 @@ impl Database {
     pub async fn get_ticket_type_by_id(&self, id: i64) -> Result<Option<TicketType>> {
         let row = sqlx::query(
             "SELECT id,guild_id,name,label,emoji,description,color,thread_name_pattern,
-             has_form,max_open_per_user,auto_close_hours,ping_roles,
-             welcome_message,auto_add_staff,staff_alert_channel_id,active
+             max_open_per_user,auto_close_hours,
+             welcome_message,staff_alert_channel_id,active
              FROM ticket_types WHERE id=?",
         )
         .bind(id)
@@ -553,8 +533,8 @@ impl Database {
     pub async fn get_ticket_type_by_name(&self, guild_id: &str, name: &str) -> Result<Option<TicketType>> {
         let row = sqlx::query(
             "SELECT id,guild_id,name,label,emoji,description,color,thread_name_pattern,
-             has_form,max_open_per_user,auto_close_hours,ping_roles,
-             welcome_message,auto_add_staff,staff_alert_channel_id,active
+             max_open_per_user,auto_close_hours,
+             welcome_message,staff_alert_channel_id,active
              FROM ticket_types WHERE guild_id=? AND name=?",
         )
         .bind(guild_id)
@@ -567,14 +547,26 @@ impl Database {
     pub async fn get_ticket_types(&self, guild_id: &str) -> Result<Vec<TicketType>> {
         let rows = sqlx::query(
             "SELECT id,guild_id,name,label,emoji,description,color,thread_name_pattern,
-             has_form,max_open_per_user,auto_close_hours,ping_roles,
-             welcome_message,auto_add_staff,staff_alert_channel_id,active
+             max_open_per_user,auto_close_hours,
+             welcome_message,staff_alert_channel_id,active
              FROM ticket_types WHERE guild_id=? AND active=1 ORDER BY id ASC",
         )
         .bind(guild_id)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows.iter().map(Self::map_ticket_type).collect())
+    }
+
+    /// Every internal name in the guild, **including deactivated categories** —
+    /// the `UNIQUE(guild_id, name)` constraint spans inactive rows too, so name
+    /// dedup must check them all.
+    pub async fn get_all_ticket_type_names(&self, guild_id: &str) -> Result<Vec<String>> {
+        let names: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM ticket_types WHERE guild_id=?")
+                .bind(guild_id)
+                .fetch_all(&self.pool)
+                .await?;
+        Ok(names)
     }
 
     pub async fn update_ticket_type(
@@ -612,12 +604,6 @@ impl Database {
         Ok(())
     }
 
-    pub async fn set_ticket_type_auto_add_staff(&self, id: i64, enabled: bool) -> Result<()> {
-        sqlx::query("UPDATE ticket_types SET auto_add_staff=? WHERE id=?")
-            .bind(enabled as i64).bind(id).execute(&self.pool).await?;
-        Ok(())
-    }
-
     pub async fn set_staff_alert_channel(&self, id: i64, channel_id: Option<&str>) -> Result<()> {
         sqlx::query("UPDATE ticket_types SET staff_alert_channel_id=? WHERE id=?")
             .bind(channel_id).bind(id).execute(&self.pool).await?;
@@ -627,12 +613,6 @@ impl Database {
     pub async fn set_ticket_type_thread_pattern(&self, id: i64, pattern: &str) -> Result<()> {
         sqlx::query("UPDATE ticket_types SET thread_name_pattern=? WHERE id=?")
             .bind(pattern).bind(id).execute(&self.pool).await?;
-        Ok(())
-    }
-
-    pub async fn set_ticket_type_has_form(&self, id: i64, has_form: bool) -> Result<()> {
-        sqlx::query("UPDATE ticket_types SET has_form=? WHERE id=?")
-            .bind(has_form as i64).bind(id).execute(&self.pool).await?;
         Ok(())
     }
 
@@ -720,6 +700,28 @@ impl Database {
         Ok(rows.iter().map(Self::map_form_field).collect())
     }
 
+    /// Question counts for every category in a guild (`ticket_type_id → count`),
+    /// for the hub's per-category question badge. Types with no questions are absent.
+    pub async fn count_form_fields_by_type(
+        &self,
+        guild_id: &str,
+    ) -> Result<std::collections::HashMap<i64, i64>> {
+        let rows: Vec<(i64, i64)> = sqlx::query_as(
+            "SELECT ff.ticket_type_id, COUNT(*) FROM form_fields ff
+             JOIN ticket_types tt ON tt.id = ff.ticket_type_id
+             WHERE tt.guild_id=? GROUP BY ff.ticket_type_id",
+        )
+        .bind(guild_id).fetch_all(&self.pool).await?;
+        Ok(rows.into_iter().collect())
+    }
+
+    /// How many intake questions the category has (cheaper than fetching them all).
+    pub async fn count_form_fields(&self, type_id: i64) -> Result<i64> {
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM form_fields WHERE ticket_type_id=?")
+            .bind(type_id).fetch_one(&self.pool).await?;
+        Ok(n)
+    }
+
     pub async fn get_form_field(&self, field_id: i64) -> Result<Option<FormField>> {
         let row = sqlx::query(
             "SELECT id,ticket_type_id,label,placeholder,style,required,min_length,max_length,position,options
@@ -729,15 +731,17 @@ impl Database {
         Ok(row.as_ref().map(Self::map_form_field))
     }
 
-    /// Set a field's options (JSON array) and placeholder, used by the question wizard.
-    pub async fn set_form_field_options(
+    /// Update an intake question's editable fields (the style is fixed at creation).
+    pub async fn update_form_field(
         &self,
         field_id: i64,
+        label: &str,
+        required: bool,
         options: Option<&str>,
         placeholder: Option<&str>,
     ) -> Result<()> {
-        sqlx::query("UPDATE form_fields SET options=?, placeholder=? WHERE id=?")
-            .bind(options).bind(placeholder).bind(field_id)
+        sqlx::query("UPDATE form_fields SET label=?, required=?, options=?, placeholder=? WHERE id=?")
+            .bind(label).bind(required as i64).bind(options).bind(placeholder).bind(field_id)
             .execute(&self.pool).await?;
         Ok(())
     }
@@ -837,29 +841,78 @@ impl Database {
         Ok(())
     }
 
-    pub async fn add_panel_type(&self, panel_id: i64, type_id: i64) -> Result<bool> {
-        let pos: i64 = sqlx::query_scalar(
-            "SELECT COALESCE(MAX(position)+1,0) FROM panel_ticket_types WHERE panel_id=?",
-        )
-        .bind(panel_id).fetch_one(&self.pool).await?;
-        let res = sqlx::query(
-            "INSERT OR IGNORE INTO panel_ticket_types (panel_id,ticket_type_id,position) VALUES (?,?,?)",
-        )
-        .bind(panel_id).bind(type_id).bind(pos).execute(&self.pool).await?;
-        Ok(res.rows_affected() > 0)
+    /// Replace a panel's category links with exactly `type_ids`, in order.
+    pub async fn set_panel_types(&self, panel_id: i64, type_ids: &[i64]) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM panel_ticket_types WHERE panel_id=?")
+            .bind(panel_id).execute(&mut *tx).await?;
+        for (pos, tid) in type_ids.iter().enumerate() {
+            sqlx::query("INSERT INTO panel_ticket_types (panel_id,ticket_type_id,position) VALUES (?,?,?)")
+                .bind(panel_id).bind(tid).bind(pos as i64).execute(&mut *tx).await?;
+        }
+        tx.commit().await?;
+        Ok(())
     }
 
-    pub async fn remove_panel_type(&self, panel_id: i64, type_id: i64) -> Result<bool> {
-        let res = sqlx::query("DELETE FROM panel_ticket_types WHERE panel_id=? AND ticket_type_id=?")
-            .bind(panel_id).bind(type_id).execute(&self.pool).await?;
-        Ok(res.rows_affected() > 0)
+    /// The panel carrying the given ticket type, if any. A unique index on
+    /// panel_ticket_types(ticket_type_id) guarantees at most one.
+    pub async fn get_panel_for_type(&self, type_id: i64) -> Result<Option<Panel>> {
+        let row = sqlx::query(
+            "SELECT p.id,p.guild_id,p.channel_id,p.message_id,p.title,p.description,p.color,
+             p.image_url,p.thumbnail_url,p.footer_text,p.layout
+             FROM panels p JOIN panel_ticket_types ptt ON ptt.panel_id=p.id
+             WHERE ptt.ticket_type_id=?",
+        )
+        .bind(type_id).fetch_optional(&self.pool).await?;
+        Ok(row.as_ref().map(Self::map_panel))
+    }
+
+    /// (category label, other panel title) for every id in `type_ids` that is
+    /// already linked to a panel other than `panel_id`.
+    pub async fn find_panel_type_conflicts(
+        &self,
+        panel_id: i64,
+        type_ids: &[i64],
+    ) -> Result<Vec<(String, String)>> {
+        if type_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders = vec!["?"; type_ids.len()].join(",");
+        let sql = format!(
+            "SELECT tt.label, p.title
+             FROM panel_ticket_types ptt
+             JOIN ticket_types tt ON tt.id = ptt.ticket_type_id
+             JOIN panels p ON p.id = ptt.panel_id
+             WHERE ptt.panel_id != ? AND ptt.ticket_type_id IN ({placeholders})",
+        );
+        let mut q = sqlx::query(&sql).bind(panel_id);
+        for tid in type_ids {
+            q = q.bind(tid);
+        }
+        let rows = q.fetch_all(&self.pool).await?;
+        Ok(rows.iter().map(|r| (r.get("label"), r.get("title"))).collect())
+    }
+
+    /// Ticket type ids linked to any panel other than `panel_id` in this guild.
+    pub async fn get_type_ids_on_other_panels(
+        &self,
+        guild_id: &str,
+        panel_id: i64,
+    ) -> Result<Vec<i64>> {
+        let ids: Vec<i64> = sqlx::query_scalar(
+            "SELECT ptt.ticket_type_id
+             FROM panel_ticket_types ptt JOIN panels p ON p.id = ptt.panel_id
+             WHERE p.guild_id=? AND ptt.panel_id != ?",
+        )
+        .bind(guild_id).bind(panel_id).fetch_all(&self.pool).await?;
+        Ok(ids)
     }
 
     pub async fn get_panel_types(&self, panel_id: i64) -> Result<Vec<TicketType>> {
         let rows = sqlx::query(
             "SELECT tt.id,tt.guild_id,tt.name,tt.label,tt.emoji,tt.description,tt.color,
-             tt.thread_name_pattern,tt.has_form,tt.max_open_per_user,tt.auto_close_hours,
-             tt.ping_roles,tt.welcome_message,tt.auto_add_staff,tt.staff_alert_channel_id,tt.active
+             tt.thread_name_pattern,tt.max_open_per_user,tt.auto_close_hours,
+             tt.welcome_message,tt.staff_alert_channel_id,tt.active
              FROM ticket_types tt
              JOIN panel_ticket_types ptt ON ptt.ticket_type_id=tt.id
              WHERE ptt.panel_id=? AND tt.active=1
@@ -890,6 +943,7 @@ impl Database {
             reported_message_url: r.get("reported_message_url"),
             reported_message_content: r.get("reported_message_content"),
             reported_author_id: r.get("reported_author_id"),
+            card_message_id: r.get("card_message_id"),
             created_at: r.get("created_at"),
             closed_at: r.get("closed_at"),
             last_activity_at: r.get("last_activity_at"),
@@ -924,7 +978,7 @@ impl Database {
              RETURNING id,ticket_number,guild_id,ticket_type_id,thread_id,parent_channel_id,
                        owner_id,claimed_by,priority,status,close_reason,closed_by,form_responses,
                        reported_message_id,reported_message_url,reported_message_content,
-                       reported_author_id,created_at,closed_at,last_activity_at",
+                       reported_author_id,card_message_id,created_at,closed_at,last_activity_at",
         )
         .bind(number).bind(guild_id).bind(ticket_type_id).bind(thread_id)
         .bind(parent_channel_id).bind(owner_id).bind(form_responses)
@@ -939,7 +993,7 @@ impl Database {
             "SELECT id,ticket_number,guild_id,ticket_type_id,thread_id,parent_channel_id,
              owner_id,claimed_by,priority,status,close_reason,closed_by,form_responses,
              reported_message_id,reported_message_url,reported_message_content,reported_author_id,
-             created_at,closed_at,last_activity_at FROM tickets WHERE id=?",
+             card_message_id,created_at,closed_at,last_activity_at FROM tickets WHERE id=?",
         )
         .bind(id).fetch_optional(&self.pool).await?;
         Ok(row.as_ref().map(Self::map_ticket))
@@ -950,7 +1004,7 @@ impl Database {
             "SELECT id,ticket_number,guild_id,ticket_type_id,thread_id,parent_channel_id,
              owner_id,claimed_by,priority,status,close_reason,closed_by,form_responses,
              reported_message_id,reported_message_url,reported_message_content,reported_author_id,
-             created_at,closed_at,last_activity_at FROM tickets WHERE thread_id=?",
+             card_message_id,created_at,closed_at,last_activity_at FROM tickets WHERE thread_id=?",
         )
         .bind(thread_id).fetch_optional(&self.pool).await?;
         Ok(row.as_ref().map(Self::map_ticket))
@@ -976,7 +1030,7 @@ impl Database {
             "SELECT id,ticket_number,guild_id,ticket_type_id,thread_id,parent_channel_id,
              owner_id,claimed_by,priority,status,close_reason,closed_by,form_responses,
              reported_message_id,reported_message_url,reported_message_content,reported_author_id,
-             created_at,closed_at,last_activity_at
+             card_message_id,created_at,closed_at,last_activity_at
              FROM tickets WHERE guild_id=? AND status='open' ORDER BY ticket_number ASC",
         )
         .bind(guild_id).fetch_all(&self.pool).await?;
@@ -988,7 +1042,7 @@ impl Database {
             "SELECT t.id,t.ticket_number,t.guild_id,t.ticket_type_id,t.thread_id,t.parent_channel_id,
              t.owner_id,t.claimed_by,t.priority,t.status,t.close_reason,t.closed_by,t.form_responses,
              t.reported_message_id,t.reported_message_url,t.reported_message_content,t.reported_author_id,
-             t.created_at,t.closed_at,t.last_activity_at
+             t.card_message_id,t.created_at,t.closed_at,t.last_activity_at
              FROM tickets t
              JOIN ticket_types tt ON tt.id=t.ticket_type_id
              WHERE t.status='open'
@@ -1009,10 +1063,21 @@ impl Database {
         Ok(())
     }
 
-    pub async fn claim_ticket(&self, id: i64, user_id: &str) -> Result<()> {
-        sqlx::query("UPDATE tickets SET claimed_by=? WHERE id=?")
-            .bind(user_id).bind(id).execute(&self.pool).await?;
+    /// Remember the in-thread CV2 ticket card's message id so later claim /
+    /// priority changes can re-render it.
+    pub async fn set_ticket_card_message(&self, id: i64, message_id: &str) -> Result<()> {
+        sqlx::query("UPDATE tickets SET card_message_id=? WHERE id=?")
+            .bind(message_id).bind(id).execute(&self.pool).await?;
         Ok(())
+    }
+
+    /// Atomically claim a ticket only if it is currently unclaimed. Returns `true`
+    /// if this call took the claim, `false` if it was already claimed (the guard
+    /// closes the check-then-act race between two near-simultaneous claimers).
+    pub async fn claim_ticket(&self, id: i64, user_id: &str) -> Result<bool> {
+        let res = sqlx::query("UPDATE tickets SET claimed_by=? WHERE id=? AND claimed_by IS NULL")
+            .bind(user_id).bind(id).execute(&self.pool).await?;
+        Ok(res.rows_affected() > 0)
     }
 
     pub async fn unclaim_ticket(&self, id: i64) -> Result<()> {

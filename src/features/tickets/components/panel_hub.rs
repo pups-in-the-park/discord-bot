@@ -5,10 +5,10 @@ use poise::serenity_prelude as serenity;
 use crate::context::{
     BotData, CID_PANEL_HUB_BACK, CID_PANEL_HUB_CREATE, CID_PANEL_HUB_OPEN, CID_PANEL_HUB_SELECT,
 };
-use crate::ui::{self, Modal, TextInputStyle};
+use crate::ui;
 use crate::util::respond_ephemeral;
 
-use super::super::view::{build_panel_config_form, build_panel_hub};
+use super::super::view::{build_panel_basics_modal, build_panel_hub};
 
 /// The panel management hub (`pnl:hub:*`): open it, go back to the list, pick a
 /// panel to configure, or create a new one.
@@ -44,19 +44,18 @@ pub async fn handle(
             let Some(panel_id) = panel_id else {
                 return Ok(());
             };
-            let Some(panel) = data.db.get_panel(panel_id).await? else {
+            if data.db.get_panel(panel_id).await?.is_none() {
                 respond_ephemeral(ctx, ci, "That panel no longer exists.").await;
                 return Ok(());
-            };
-            let all_cats = data.db.get_ticket_types(&g).await?;
-            let linked: Vec<i64> = data.db.get_panel_types(panel_id).await?.iter().map(|t| t.id).collect();
-            ui::update(&ctx.http, ci.id, &ci.token, &build_panel_config_form(&panel, &all_cats, &linked)).await?;
+            }
+            super::panel_config::show_config_form(&ctx.http, data, ci.id, &ci.token, panel_id, &g).await?;
         }
         CID_PANEL_HUB_CREATE => {
-            let modal = Modal::new("m:pnl:create", "➕ Create Ticket Panel")
-                .text_row("pnl_title", "Panel title", TextInputStyle::Short, "e.g. Support", true, None)
-                .text_row("pnl_desc", "Description", TextInputStyle::Paragraph, "Shown under the title on the panel", false, None)
-                .text_row("pnl_color", "Accent colour (hex)", TextInputStyle::Short, "e.g. 5865F2", false, None);
+            let modal = build_panel_basics_modal(
+                crate::ids::CID_PANEL_CREATE_MODAL.to_string(),
+                "➕ Create Ticket Panel",
+                None,
+            );
             ui::open_modal(&ctx.http, ci, &modal).await?;
         }
         _ => {

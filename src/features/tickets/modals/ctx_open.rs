@@ -4,8 +4,11 @@ use poise::serenity_prelude as serenity;
 
 use crate::context::BotData;
 use crate::ids::parse_ctx_open_modal;
+use crate::util::respond_ephemeral_modal;
 
-use super::super::service::{collect_form_responses, open_thread, OpenThreadOptions};
+use super::super::service::{
+    collect_form_responses, open_thread, resolve_parent_for_type, OpenThreadOptions,
+};
 
 /// Staff-on-behalf intake modal (`m:ctx:{type_id}:{target_user_id}`): open a
 /// ticket for another user.
@@ -27,25 +30,17 @@ pub async fn handle(
         .ok_or_else(|| anyhow::anyhow!("Ticket type not found"))?;
     let fields = data.db.get_form_fields(ticket_type_id).await?;
     let responses = collect_form_responses(&mi.data.components, &fields);
-    let guild_cfg = data.db.get_or_create_guild(&guild_id.to_string()).await?;
-    let Some(parent_ch) = guild_cfg
-        .ticket_channel_id
-        .and_then(|s| s.parse::<u64>().ok())
-        .map(serenity::ChannelId::new)
-    else {
-        mi.create_response(
-            &ctx.http,
-            serenity::CreateInteractionResponse::Message(
-                serenity::CreateInteractionResponseMessage::new()
-                    .ephemeral(true)
-                    .content("No ticket channel is set yet. Configure one in `/setup overview` → Ticket channel before opening tickets."),
-            ),
-        )
-        .await?;
-        return Ok(());
+    // No panel interaction to inherit a channel from, so the ticket opens in
+    // the category's panel's channel.
+    let parent_ch = match resolve_parent_for_type(data, &ticket_type).await {
+        Ok(c) => c,
+        Err(e) => {
+            respond_ephemeral_modal(ctx, mi, &e.to_string()).await;
+            return Ok(());
+        }
     };
 
-    // Thread creation + card + staff auto-add can exceed the 3-second window.
+    // Thread creation + card can exceed the 3-second window.
     mi.create_response(
         &ctx.http,
         serenity::CreateInteractionResponse::Defer(
@@ -56,7 +51,7 @@ pub async fn handle(
 
     let ticket_number = data.db.next_ticket_number(&guild_id.to_string()).await?;
     let owner_id = serenity::UserId::new(target_user_id);
-    open_thread(
+    let opened = open_thread(
         ctx,
         data,
         guild_id,
@@ -72,13 +67,17 @@ pub async fn handle(
             reported_author_id: None,
         },
     )
-    .await?;
+    .await;
 
+    // Surface open_thread's actionable message instead of a generic dispatch
+    // error; we've deferred, so respond via follow-up.
+    let content = match opened {
+        Ok(_) => format!("Ticket opened for <@{}>.", target_user_id),
+        Err(e) => e.to_string(),
+    };
     mi.create_followup(
         &ctx.http,
-        serenity::CreateInteractionResponseFollowup::new()
-            .ephemeral(true)
-            .content(format!("Ticket opened for <@{}>.", target_user_id)),
+        serenity::CreateInteractionResponseFollowup::new().ephemeral(true).content(content),
     )
     .await?;
     Ok(())
