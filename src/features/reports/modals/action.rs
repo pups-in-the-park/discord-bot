@@ -20,7 +20,7 @@ pub async fn handle(
         return Ok(());
     };
     if !crate::permissions::is_mod_staff(ctx, data, guild_id, mi.user.id).await {
-        ephemeral_reply(ctx, mi, "Only staff can take action on reports.").await?;
+        crate::util::respond_ephemeral_modal(ctx, mi, "Only staff can take action on reports.").await;
         return Ok(());
     }
     let reason = modal_field(&mi.data.components, "reason")
@@ -34,14 +34,15 @@ pub async fn handle(
         .ok_or_else(|| anyhow::anyhow!("Report not found"))?;
 
     if report.status != "open" {
-        ephemeral_reply(ctx, mi, "This report has already been resolved.").await?;
+        crate::util::respond_ephemeral_modal(ctx, mi, "This report has already been resolved.").await;
         return Ok(());
     }
     if super::super::acting_on_own_report(mi.user.id, &report) {
-        ephemeral_reply(ctx, mi, super::super::SELF_ACTION_REFUSAL).await?;
+        crate::util::respond_ephemeral_modal(ctx, mi, super::super::SELF_ACTION_REFUSAL).await;
         return Ok(());
     }
     let reporter_id = report.reporter_id.clone();
+    let via_report = format!("Via report #{}", report_id);
 
     // Applying the action, DMing the target, archiving the thread, and notifying the
     // reporter exceeds the 3-second window — acknowledge first, confirm via follow-up.
@@ -53,9 +54,16 @@ pub async fn handle(
     )
     .await?;
 
+    // Resolve the target and mod config once, up front — before any irreversible
+    // action. A transient failure here aborts before we've touched anything, so
+    // the report stays open for a clean retry; doing it per-arm *after* the
+    // Discord action (as before) would skip the shared resolve/archive/notify
+    // block below and leave the report stuck "open".
+    let target = serenity::UserId::new(target_id).to_user(ctx).await?;
+    let mod_cfg = data.db.get_or_create_mod_config(&guild_id.to_string()).await?;
+
     match action.as_str() {
         "warn" => {
-            let target = serenity::UserId::new(target_id).to_user(ctx).await?;
             let infraction = data
                 .db
                 .create_infraction(
@@ -69,7 +77,6 @@ pub async fn handle(
                     None,
                 )
                 .await?;
-            let mod_cfg = data.db.get_or_create_mod_config(&guild_id.to_string()).await?;
             if mod_cfg.dm_on_warn {
                 crate::features::moderation::service::send_action_dm(
                     &ctx.http,
@@ -80,6 +87,18 @@ pub async fn handle(
                 )
                 .await;
             }
+            crate::features::moderation::view::log_action(
+                &ctx.http,
+                data,
+                guild_id,
+                "warn",
+                Some(infraction.id),
+                &target,
+                mi.user.id,
+                &reason,
+                Some(&via_report),
+            )
+            .await;
         }
         "dw" => {
             if let Some(ref msg_url) = report.message_url {
@@ -97,7 +116,6 @@ pub async fn handle(
                     }
                 }
             }
-            let target = serenity::UserId::new(target_id).to_user(ctx).await?;
             let infraction = data
                 .db
                 .create_infraction(
@@ -111,7 +129,6 @@ pub async fn handle(
                     None,
                 )
                 .await?;
-            let mod_cfg = data.db.get_or_create_mod_config(&guild_id.to_string()).await?;
             if mod_cfg.dm_on_warn {
                 crate::features::moderation::service::send_action_dm(
                     &ctx.http,
@@ -122,6 +139,18 @@ pub async fn handle(
                 )
                 .await;
             }
+            crate::features::moderation::view::log_action(
+                &ctx.http,
+                data,
+                guild_id,
+                "warn",
+                Some(infraction.id),
+                &target,
+                mi.user.id,
+                &reason,
+                Some(&format!("Message deleted · via report #{}", report_id)),
+            )
+            .await;
         }
         "timeout" => {
             let secs: i64 =
@@ -139,7 +168,8 @@ pub async fn handle(
                 )
                 .await
                 .ok();
-            data.db
+            let infraction = data
+                .db
                 .create_infraction(
                     &guild_id.to_string(),
                     &target_id.to_string(),
@@ -151,13 +181,56 @@ pub async fn handle(
                     Some(until_str.as_str()),
                 )
                 .await?;
+            if mod_cfg.dm_on_timeout {
+                crate::features::moderation::service::send_action_dm(
+                    &ctx.http,
+                    &target,
+                    guild_id,
+                    crate::features::moderation::service::ModActionDm::Timeout {
+                        reason: &reason,
+                        until,
+                    },
+                    Some((infraction.id, guild_id)),
+                )
+                .await;
+            }
+            let info = format!(
+                "{} · ends <t:{}:R> · via report #{}",
+                crate::util::format_duration(secs),
+                until.unix_timestamp(),
+                report_id
+            );
+            crate::features::moderation::view::log_action(
+                &ctx.http,
+                data,
+                guild_id,
+                "timeout",
+                Some(infraction.id),
+                &target,
+                mi.user.id,
+                &reason,
+                Some(&info),
+            )
+            .await;
         }
         "kick" => {
+            // DM before the kick — once they're out of the guild we can't reach them.
+            if mod_cfg.dm_on_kick {
+                crate::features::moderation::service::send_action_dm(
+                    &ctx.http,
+                    &target,
+                    guild_id,
+                    crate::features::moderation::service::ModActionDm::Kick { reason: &reason },
+                    None,
+                )
+                .await;
+            }
             guild_id
                 .kick(&ctx.http, serenity::UserId::new(target_id), Some(&reason))
                 .await
                 .ok();
-            data.db
+            let infraction = data
+                .db
                 .create_infraction(
                     &guild_id.to_string(),
                     &target_id.to_string(),
@@ -169,6 +242,18 @@ pub async fn handle(
                     None,
                 )
                 .await?;
+            crate::features::moderation::view::log_action(
+                &ctx.http,
+                data,
+                guild_id,
+                "kick",
+                Some(infraction.id),
+                &target,
+                mi.user.id,
+                &reason,
+                Some(&via_report),
+            )
+            .await;
         }
         "ban" => {
             let appealable = crate::util::modal_checked(&mi.data.components, "appealable");
@@ -177,6 +262,14 @@ pub async fn handle(
                 crate::features::moderation::service::ban_expiry(duration_secs);
             guild_id
                 .ban(&ctx.http, serenity::UserId::new(target_id), 0, Some(&reason))
+                .await
+                .ok();
+            // A new ban supersedes any active one — deactivate older ban
+            // infractions first, or an earlier temp ban's expiry would lift it.
+            // Best-effort so a transient failure can't skip recording the new
+            // ban's expiry (which would leave the user banned forever).
+            data.db
+                .deactivate_active_bans(&guild_id.to_string(), &target_id.to_string())
                 .await
                 .ok();
             let infraction = data
@@ -192,8 +285,6 @@ pub async fn handle(
                     expires_at.as_deref(),
                 )
                 .await?;
-            let target = serenity::UserId::new(target_id).to_user(ctx).await?;
-            let mod_cfg = data.db.get_or_create_mod_config(&guild_id.to_string()).await?;
             if mod_cfg.dm_on_ban {
                 let appeal_info = if appealable {
                     Some((infraction.id, guild_id))
@@ -209,6 +300,22 @@ pub async fn handle(
                 )
                 .await;
             }
+            let length = match until_ts {
+                Some(ts) => format!("Temporary — lifts <t:{}:R> · via report #{}", ts, report_id),
+                None => format!("Permanent · via report #{}", report_id),
+            };
+            crate::features::moderation::view::log_action(
+                &ctx.http,
+                data,
+                guild_id,
+                "ban",
+                Some(infraction.id),
+                &target,
+                mi.user.id,
+                &reason,
+                Some(&length),
+            )
+            .await;
         }
         _ => {}
     }
@@ -227,27 +334,13 @@ pub async fn handle(
         &ctx.http,
         serenity::CreateInteractionResponseFollowup::new()
             .ephemeral(true)
-            .content("Action taken. Report resolved and thread archived."),
+            .content(format!(
+                "Done — action taken, report #{} resolved, and the thread archived.",
+                report_id
+            )),
     )
     .await
     .ok();
     Ok(())
 }
 
-/// Reply to a modal submission with a short ephemeral message.
-async fn ephemeral_reply(
-    ctx: &serenity::Context,
-    mi: &serenity::ModalInteraction,
-    msg: &str,
-) -> Result<(), anyhow::Error> {
-    mi.create_response(
-        &ctx.http,
-        serenity::CreateInteractionResponse::Message(
-            serenity::CreateInteractionResponseMessage::new()
-                .ephemeral(true)
-                .content(msg),
-        ),
-    )
-    .await?;
-    Ok(())
-}

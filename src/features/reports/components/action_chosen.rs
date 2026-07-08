@@ -129,7 +129,7 @@ pub async fn handle(
                     Some("What did they do?"),
                     None,
                 ),
-                crate::util::duration_select("How long to mute", "duration", 3600),
+                crate::util::preset_select("How long to mute", "duration", crate::util::DURATION_PRESETS, 3600),
             ],
         ),
         "ban" => (
@@ -143,7 +143,7 @@ pub async fn handle(
                     Some("Be specific about the violation"),
                     None,
                 ),
-                crate::util::ban_duration_select("Ban length", "duration", 0),
+                crate::util::preset_select("Ban length", "duration", crate::util::BAN_DURATION_PRESETS, 0),
                 crate::util::single_checkbox("Appeals", "appealable", "Allow them to appeal", true),
             ],
         ),
