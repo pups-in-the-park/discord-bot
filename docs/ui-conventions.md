@@ -12,16 +12,34 @@ inside modals.
 `embeds`; conversely an embed message cannot hold CV2 containers, sections, or
 inline buttons. So every surface commits to one paradigm before you build it.
 
-## Pick the paradigm: interactivity decides
+## Pick the paradigm: interactivity first, then weight
 
-Ask one question: **does the surface have controls the user acts on (buttons /
-selects), or does it re-render in place in response to an interaction?**
+Ask two questions, in order:
+
+1. **Does the surface have controls the user acts on (buttons / selects), or does
+   it re-render in place in response to an interaction?** If yes → **CV2 container**.
+2. If no (read-only), **does structured chrome actually earn its keep** — discrete
+   labelled facts (field grid), an author line, a thumbnail/avatar, an
+   auto-localized timestamp, an accent colour that carries meaning? If yes →
+   **embed**. If it's just a sentence or two of prose → **plain markdown text**.
 
 | Answer | Paradigm | Why |
 | --- | --- | --- |
-| **No — read-only** | **Embed** | Built-in chrome (colour bar, field grid, author, footer, auto-localized timestamp, thumbnail/image) for free. Logs, notices, DMs, confirmations, help, info. |
-| **Yes — interactive** | **CV2 container** | Inline buttons/selects, sections with accessories, separators, galleries, and edit-in-place updates. Tickets, reports, appeals, panels, **config (`/setup`)**. |
+| **Has controls / edits in place** | **CV2 container** | Inline buttons/selects, sections with accessories, separators, galleries, edit-in-place. Tickets, reports, appeals, panels, **config (`/setup`)**. |
+| **Read-only + structured chrome pays off** | **Embed** | Colour bar, field grid, author, footer, auto-localized timestamp, thumbnail/image for free. Mod/event logs, member DMs, history & list views, blocklist/mod-action receipts. |
+| **Read-only + just a line or two of prose** | **Plain markdown** | A normal message `content` — no embed, no container. Command confirmations & acks (“Ticket unclaimed”, “Priority set to High”, role given), `/ping`, `/help`, `/concern stats`. Don't wrap a single sentence in chrome. |
 | **Free-text / numeric capture** | **Modal** | A focused form that submits once. Always *launched from* something else — an ✏️ Edit button on a CV2 card, or a command / context menu. Never a standalone surface. |
+
+**The rule of thumb:** controls → container; a labelled/structured read-only record
+→ embed; a plain confirmation → plain text. When in doubt between embed and plain
+text, ask whether you'd fill in more than a `description` — if not, it's plain text.
+
+> **Kit caveat.** Every sender in `src/ui/respond.rs` (`send`, `edit`,
+> `respond_ephemeral`, `update`, `slash_respond`, …) hard-codes `CV2_FLAG`, so the
+> `ui::` kit *only* emits CV2 containers. Plain-text surfaces go through poise
+> (`ctx.send(CreateReply::default().content(..))`) or a raw `content` message —
+> **not** through `ui::`. Never route a no-control surface through `ui::` just
+> because it's convenient; that's what produced the old text-in-a-container cards.
 
 Config (`/setup`) is **not** a separate paradigm — it's a CV2 surface (usually
 ephemeral). How its values are entered is covered under "Data entry on CV2
@@ -31,8 +49,12 @@ Corollaries of the binary rule:
 - **An embed never carries buttons.** Need a button anywhere on the card → it's
   CV2. Use **markdown links** (not link buttons) for jump-to-message / external
   links inside an embed.
-- **A read-only card is an embed**, even if it would also look fine in CV2. Don't
-  reach for a CV2 container just to draw a coloured box around static text.
+- **A read-only surface is never a CV2 container.** Don't reach for a container
+  just to draw a coloured box around static text — it's an embed if structured
+  chrome pays off, otherwise plain markdown. (The terminal states of an
+  interactive card — a resolved appeal, a dismissed report — are the one
+  exception: once a message is sent as CV2, Discord forbids editing it into a
+  plain/embed message, so an edit-in-place outcome stays a container.)
 - **A member notice that the member must act on** (e.g. an "Appeal" button) is no
   longer read-only → it's a CV2 card. If the action lives elsewhere (a slash
   command, a context menu), the notice stays a read-only embed.
@@ -92,19 +114,30 @@ Guidance:
 ### Hubs & status dashboards
 
 Multi-step admin areas use a **hub**: an ephemeral CV2 card that lists what exists
-(a `StringSelect` to pick one to configure) plus a Create button, and re-renders in
-place (`ui::update`) as you drill in and back out. `/setup overview`, `/ticket category
-manage`, and `/ticket panel manage` are the references. Conventions:
+— one `Section` per item with an inline **Configure button** accessory (falling back
+to a `StringSelect` when the list is too big for the component cap) — plus a Create
+button, and re-renders in place (`ui::update`) as you drill in and back out.
+`/setup overview`, `/ticket category manage`, and `/ticket panel manage` are the
+references. Conventions:
 
 - A **status dashboard** (`/setup overview`) is a hub-of-hubs: one `Section` per area
   with a ✅/⚠️ status line and a quick-link **button** accessory that opens that area.
-  Surface the one setting that blocks everything (the ticket channel) explicitly.
+  Surface the one setting that blocks everything (a published panel) explicitly.
 - **Open vs back vs drill-in.** A button launched from *another* card opens the hub as
   a **new** ephemeral (`ui::respond_ephemeral`); a Back/select button *inside* the hub
   updates **in place** (`ui::update`). Give them separate custom ids (e.g. `…:open`
   vs `…:back`) so they don't fight over which behaviour applies.
 - Keep a card under ~38 components (Discord's limit is 40) — fold related controls
   into one form rather than spreading across several.
+- A config card with many settings splits into **tabs**: a row of buttons under the
+  header (active tab `Primary` + disabled, others `Secondary`) that swap the body in
+  place, with each setting as a `Section` row — current value as text, its edit
+  control as the accessory. The category config panel (`cat:cfg:{id}:tab:{tab}`) is
+  the reference.
+- **A modal submit can never open another modal** (Discord rejects it). Collect a
+  flow's choice *first* with an inline select/button, then open one modal that
+  gathers everything else — don't design two-modal wizards. The add-question select
+  and the single category create modal are the references.
 
 ### Data entry on CV2 surfaces
 

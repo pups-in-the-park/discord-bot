@@ -1,5 +1,4 @@
-use crate::context::{colours, Context, Error};
-use crate::ui::{self, Container};
+use crate::context::{Context, Error};
 
 /// Show per-moderator concern statistics (which mod is challenged most).
 #[poise::command(slash_command, guild_only)]
@@ -29,7 +28,7 @@ pub async fn stats(ctx: Context<'_>) -> Result<(), Error> {
         }
     }
 
-    let card = Container::new(vec![ui::text(body)]).accent(colours::ORANGE.0);
-    ui::slash_respond(ctx, &[card.into()]).await?;
+    // Read-only stats, no controls → plain markdown (was a text-only CV2 container).
+    ctx.send(poise::CreateReply::default().ephemeral(true).content(body)).await?;
     Ok(())
 }
