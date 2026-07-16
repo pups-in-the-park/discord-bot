@@ -133,9 +133,7 @@ pub async fn send_action_dm(
 
     let mut body = action.body(&guild);
 
-    // A DM the member must act on (Appeal button) is interactive → CV2 card. A DM
-    // that's a pure notice (no appeal) is read-only → embed. One paradigm per
-    // message, per the UI conventions.
+    // Interactive DM (Appeal button) → CV2 card; pure notice → embed.
     if let Some((infraction_id, gid)) = appeal_info {
         body.push_str("\n\nIf you believe this was a mistake, you can appeal below.");
         let card = Container::new(vec![
@@ -163,10 +161,73 @@ pub async fn send_action_dm(
     }
 }
 
-/// Lift a ban: unban on Discord, record an `unban` infraction, deactivate any
-/// active ban rows, post to the mod-log, and send a courtesy DM. Shared by
-/// `/unban` and the temp-ban expiry task so the two paths can't drift. Returns
-/// the new infraction's id.
+/// Ban a user end-to-end. Shared by `/ban`, the ban modal, and report actions.
+///
+/// Order matters: record + DM first (once banned, the user shares no guild
+/// with the bot and the DM can't deliver), then ban. If Discord refuses, the
+/// record is deleted again so /history never shows a ban that didn't happen.
+/// On success, older active ban rows are retired so a previous temp ban's
+/// expiry can't lift this one.
+#[allow(clippy::too_many_arguments)]
+pub async fn apply_ban(
+    http: &serenity::Http,
+    data: &std::sync::Arc<crate::context::BotData>,
+    guild_id: serenity::GuildId,
+    target: &serenity::User,
+    moderator_id: serenity::UserId,
+    reason: &str,
+    delete_secs: u32,
+    duration_secs: Option<i64>,
+    expires_at: Option<&str>,
+    until_ts: Option<i64>,
+    appealable: bool,
+    dm_on_ban: bool,
+) -> anyhow::Result<crate::db::Infraction> {
+    let g = guild_id.to_string();
+    let u = target.id.to_string();
+    let infraction = data
+        .db
+        .create_infraction(&g, &u, &moderator_id.to_string(), "ban", reason, duration_secs, appealable, expires_at)
+        .await?;
+
+    if dm_on_ban {
+        let appeal_info = if appealable { Some((infraction.id, guild_id)) } else { None };
+        send_action_dm(http, target, guild_id, ModActionDm::Ban { reason, until: until_ts }, appeal_info)
+            .await;
+    }
+
+    if let Err(e) = guild_id.ban(http, target.id, delete_secs, Some(reason)).await {
+        data.db.delete_infraction(infraction.id).await.ok();
+        return Err(e.into());
+    }
+
+    data.ban_cache.invalidate(guild_id);
+
+    // Retire superseded rows only now that the ban is real. A missed row's
+    // expiry would later *unban* this user, so log loudly on failure.
+    if let Err(e) = data.db.deactivate_other_active_bans(&g, &u).await {
+        tracing::error!("Couldn't retire superseded ban rows for {u} in {g}: {e:?}");
+    }
+    Ok(infraction)
+}
+
+/// Discord's 404 / Unknown Ban — the user is already unbanned.
+pub fn error_is_unknown_ban(e: &serenity::Error) -> bool {
+    matches!(
+        e,
+        serenity::Error::Http(serenity::HttpError::UnsuccessfulRequest(r))
+            if r.status_code == serenity::StatusCode::NOT_FOUND
+    )
+}
+
+/// Lift a ban: unban on Discord, record an `unban` infraction, deactivate ban
+/// rows, post to the mod-log, and send a courtesy DM. Shared by `/unban` and
+/// the temp-ban expiry task so the two paths can't drift. Returns the new
+/// infraction's id.
+///
+/// `only_infraction`: the expiry task passes the row it's lifting so a
+/// concurrent re-ban's fresh row isn't retired with it; manual unbans pass
+/// `None` to retire everything.
 pub async fn lift_ban(
     http: &serenity::Http,
     data: &std::sync::Arc<crate::context::BotData>,
@@ -174,31 +235,48 @@ pub async fn lift_ban(
     user_id: serenity::UserId,
     moderator_id: serenity::UserId,
     reason: &str,
+    only_infraction: Option<i64>,
 ) -> anyhow::Result<i64> {
     guild_id.unban(http, user_id, Some(reason)).await?;
+    data.ban_cache.invalidate(guild_id);
     let g = guild_id.to_string();
     let u = user_id.to_string();
     let infraction = data
         .db
         .create_infraction(&g, &u, &moderator_id.to_string(), "unban", reason, None, false, None)
         .await?;
-    data.db.deactivate_active_bans(&g, &u).await.ok();
+    match only_infraction {
+        Some(id) => data.db.deactivate_infraction(id).await.ok(),
+        None => data.db.deactivate_active_bans(&g, &u).await.ok(),
+    };
     // Best-effort courtesy DM (the user shares no guild with us once unbanned,
     // so this may not deliver). The same fetch feeds the mod-log entry.
-    if let Ok(user) = user_id.to_user(http).await {
-        send_action_dm(http, &user, guild_id, ModActionDm::Unban, None).await;
-        crate::features::moderation::view::log_action(
-            http,
-            data,
-            guild_id,
-            "unban",
-            Some(infraction.id),
-            &user,
-            moderator_id,
-            reason,
-            None,
-        )
-        .await;
+    match user_id.to_user(http).await {
+        Ok(user) => {
+            send_action_dm(http, &user, guild_id, ModActionDm::Unban, None).await;
+            crate::features::moderation::view::log_action(
+                http,
+                data,
+                guild_id,
+                "unban",
+                Some(infraction.id),
+                &user,
+                moderator_id,
+                reason,
+                None,
+            )
+            .await;
+        }
+        Err(e) => {
+            // Unban succeeded — don't fail the caller, just note the missing log entry.
+            tracing::warn!(
+                "Unban of {} in {} succeeded but the user fetch failed ({e}); \
+                 no mod-log entry was posted for infraction {}",
+                user_id,
+                guild_id,
+                infraction.id
+            );
+        }
     }
     Ok(infraction.id)
 }

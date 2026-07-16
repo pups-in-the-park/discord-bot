@@ -65,10 +65,37 @@ pub fn history_embed(
     } else {
         format!("{} infraction{} on record", n, if n == 1 { "" } else { "s" })
     };
+    // Reasons are free text and Discord rejects descriptions over 4096 chars —
+    // pack entries until the budget runs out rather than failing /history.
+    let entries = crate::util::format_infraction_history(infractions);
+    let mut description = String::new();
+    let mut shown = 0usize;
+    for entry in &entries {
+        let sep = if description.is_empty() { 0 } else { 2 };
+        if description.chars().count() + sep + entry.chars().count() > 3900 {
+            break;
+        }
+        if sep > 0 {
+            description.push_str("\n\n");
+        }
+        description.push_str(entry);
+        shown += 1;
+    }
+    if shown == 0 {
+        // A single entry can blow the budget by itself (one giant reason).
+        description = entries[0].chars().take(3900).collect();
+        shown = 1;
+    }
+    if shown < entries.len() {
+        description.push_str(&format!(
+            "\n\n-# …{} more not shown (entries too long to fit).",
+            entries.len() - shown
+        ));
+    }
     serenity::CreateEmbed::new()
         .colour(colours::ORANGE)
         .title(title)
-        .description(crate::util::format_infraction_history(infractions).join("\n\n"))
+        .description(description)
         .footer(serenity::CreateEmbedFooter::new(footer))
 }
 

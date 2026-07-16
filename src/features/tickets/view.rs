@@ -16,9 +16,12 @@ const ALERT_CHANNELS: &[ChannelType] =
 
 /// A select option for a ticket category: label plus optional description/emoji.
 fn category_option(t: &TicketType) -> SelectOption {
-    let mut opt = SelectOption::new(t.id.to_string(), &t.label);
+    // Discord caps option labels/descriptions at 100 chars; the category modal
+    // accepts longer.
+    let label: String = t.label.chars().take(100).collect();
+    let mut opt = SelectOption::new(t.id.to_string(), label);
     if let Some(ref d) = t.description {
-        opt = opt.description(d);
+        opt = opt.description(d.chars().take(100).collect::<String>());
     }
     if let Some(ref e) = t.emoji {
         opt = opt.emoji(e);
@@ -181,7 +184,9 @@ pub fn build_panel_config_form(
             .iter()
             .take(25)
             .map(|c| {
-                let mut opt = SelectOption::new(c.id.to_string(), &c.label).default(linked_ids.contains(&c.id));
+                // Same 100-char label cap as `category_option`.
+                let label: String = c.label.chars().take(100).collect();
+                let mut opt = SelectOption::new(c.id.to_string(), label).default(linked_ids.contains(&c.id));
                 if let Some(ref e) = c.emoji {
                     opt = opt.emoji(e);
                 }
@@ -274,6 +279,16 @@ fn cap_label(s: &str) -> String {
     s.chars().take(45).collect()
 }
 
+/// Truncate to `max` chars (byte slicing panics mid-UTF-8), adding an ellipsis
+/// that counts toward `max` — callers budget against hard Discord limits.
+fn truncate_chars(s: &str, max: usize) -> String {
+    if s.chars().count() > max {
+        format!("{}…", s.chars().take(max.saturating_sub(1)).collect::<String>())
+    } else {
+        s.to_string()
+    }
+}
+
 /// The colour dropdown used by the category basic-info modal. Preselects the
 /// palette entry matching `current`; a stored colour outside the palette is
 /// offered as an extra pre-selected option so re-saving can't clobber it.
@@ -353,9 +368,16 @@ fn build_intake_field(f: &crate::db::FormField) -> Option<serenity::CreateModalC
             if opts.is_empty() {
                 return None;
             }
+            // Authoring validates these now, but old rows may exceed the limits —
+            // cap defensively so one bad question can't 400 every ticket-open
+            // modal. Dedupe too: the 100-char cap can collapse two long options.
+            let mut seen = std::collections::HashSet::new();
             let options: Vec<serenity::CreateSelectMenuOption> = opts
                 .iter()
-                .map(|o| serenity::CreateSelectMenuOption::new(o.clone(), o.clone()))
+                .map(|o| o.chars().take(100).collect::<String>())
+                .filter(|o| seen.insert(o.clone()))
+                .take(25)
+                .map(|o| serenity::CreateSelectMenuOption::new(o.clone(), o))
                 .collect();
             // Discord defaults an omitted `required` to true, so an optional
             // question must send required:false explicitly (min_values alone
@@ -381,9 +403,14 @@ fn build_intake_field(f: &crate::db::FormField) -> Option<serenity::CreateModalC
             if opts.is_empty() {
                 return None;
             }
+            // Same caps as the select arm (also keeps the u8 cast from wrapping).
+            let mut seen = std::collections::HashSet::new();
             let options: Vec<serenity::CreateCheckboxGroupOption> = opts
                 .iter()
-                .map(|o| serenity::CreateCheckboxGroupOption::new(o.clone(), o.clone()))
+                .map(|o| o.chars().take(100).collect::<String>())
+                .filter(|o| seen.insert(o.clone()))
+                .take(25)
+                .map(|o| serenity::CreateCheckboxGroupOption::new(o.clone(), o))
                 .collect();
             let count = options.len() as u8;
             let group = serenity::CreateCheckboxGroup::new(id, options)
@@ -522,11 +549,9 @@ fn question_type_label(style: &str) -> &'static str {
 /// 40-per-message cap, so a big list must collapse into one dropdown.
 const HUB_SECTION_LIMIT: usize = 10;
 
-/// The category management hub: each category as a row with an inline Configure
-/// button (a select fallback beyond [`HUB_SECTION_LIMIT`]) and a button to create
-/// a new one. `question_counts` maps `ticket_type_id → intake question count`
-/// (from [`crate::db::Db::count_form_fields_by_type`]). The friendly entry point
-/// replacing the old `create`/`list`/`configure`/`delete` slash commands.
+/// The category management hub: one row per category with an inline Configure
+/// button (select fallback beyond [`HUB_SECTION_LIMIT`]), plus Create.
+/// `question_counts` maps `ticket_type_id → intake question count`.
 pub fn build_category_hub(
     cats: &[TicketType],
     question_counts: &std::collections::HashMap<i64, i64>,
@@ -720,6 +745,20 @@ fn config_tab_behaviour(cat: &TicketType, staff_role_ids: &[String]) -> Vec<Comp
         .into()
     };
 
+    // On/Off toggle: state in the text, flip action on the accessory button.
+    let toggle_row = |field: &str, on: bool, text: String| -> Component {
+        Section::new(
+            vec![ui::text(text)],
+            Button::new(
+                format!("cat:cfg:{}:{}", id, field),
+                if on { "On" } else { "Off" },
+                if on { ButtonStyle::Success } else { ButtonStyle::Secondary },
+            )
+            .into(),
+        )
+        .into()
+    };
+
     let staff_select = RoleSelect::new(format!("cat:cfg:{}:ping_roles", id))
         .placeholder("Select staff roles…")
         .max_values(10)
@@ -727,12 +766,28 @@ fn config_tab_behaviour(cat: &TicketType, staff_role_ids: &[String]) -> Vec<Comp
     let alert_select = ChannelSelect::new(format!("cat:cfg:{}:alert_ch", id), ALERT_CHANNELS)
         .placeholder("Select a channel…")
         .default(cat.staff_alert_channel_id.as_deref());
+    let ticket_ch_select =
+        ChannelSelect::new(format!("cat:cfg:{}:ticket_ch", id), &[ChannelType::Text])
+            .placeholder("Use the panel's channel (default)…")
+            .default(cat.ticket_channel_id.as_deref());
 
     vec![
-        ui::text("### 👥 Staff Roles\n-# Pinged and pulled into each new ticket thread when it opens."),
+        ui::text("### 👥 Staff Roles\n-# The staff team for this category — how they're notified is set by the toggles below."),
         ui::action_row(vec![staff_select.into()]),
-        ui::text("### 📢 Staff Alert Channel\n-# A card with a Join button is posted here for each new ticket (no extra ping)."),
+        toggle_row(
+            "auto_add",
+            cat.auto_add_staff,
+            "### ➕ Auto-Add Staff\n-# Ping the staff roles inside each new ticket thread — the mention also pulls them into the private thread.".to_string(),
+        ),
+        toggle_row(
+            "notify",
+            cat.notify_staff,
+            "### 🔔 Notify Staff\n-# When Auto-Add is off, ping the staff roles with the alert-channel card. Both off = no staff pings.".to_string(),
+        ),
+        ui::text("### 📢 Staff Alert Channel\n-# A card with Join/Jump buttons is posted here for each new ticket."),
         ui::action_row(vec![alert_select.into()]),
+        ui::text("### 📂 Ticket Channel\n-# Where this category's tickets open. Leave unset to use its panel's channel — set it for staff-only categories that aren't on any panel."),
+        ui::action_row(vec![ticket_ch_select.into()]),
         ui::separator(false, Spacing::Small),
         change_row("num_max_open", format!("### 🔢 Max Open Per User — **{}**", max_open_text)),
         change_row("num_auto_close", format!("### ⏰ Auto-Close — **{}**", auto_close_text)),
@@ -875,11 +930,15 @@ pub fn build_ticket_card(
 ) -> Vec<Component> {
     use crate::context::{cid_claim_btn, cid_priority_select, Priority, CID_CLOSE_BTN};
 
-    let header = format!(
-        "**{}{} — #{:04}**",
-        cat.emoji.as_deref().map(|e| format!("{} ", e)).unwrap_or_default(),
-        cat.label,
-        ticket.ticket_number,
+    // The label comes from a modal input with no max_length — cap the header too.
+    let header = truncate_chars(
+        &format!(
+            "**{}{} — #{:04}**",
+            cat.emoji.as_deref().map(|e| format!("{} ", e)).unwrap_or_default(),
+            cat.label,
+            ticket.ticket_number,
+        ),
+        256,
     );
 
     let default_welcome = format!(
@@ -900,7 +959,10 @@ pub fn build_ticket_card(
             for (k, v) in &map {
                 let val = v.as_str().unwrap_or("");
                 if !val.is_empty() {
-                    let indented = val.replace('\n', "\n> ");
+                    // Paragraph answers can run to 4000 chars each — abridge so
+                    // the card stays under the limit and actually posts.
+                    let capped = truncate_chars(val, 600);
+                    let indented = capped.replace('\n', "\n> ");
                     welcome.push_str(&format!("\n\n**{}:**\n> {}", k, indented));
                 }
             }
@@ -910,7 +972,7 @@ pub fn build_ticket_card(
     if ticket.reported_message_id.is_some() {
         welcome.push_str(&format!(
             "\n\n**⚑ Reported message:**\n> {}",
-            ticket.reported_message_content.as_deref().unwrap_or("*(no content)*"),
+            truncate_chars(ticket.reported_message_content.as_deref().unwrap_or("*(no content)*"), 600),
         ));
         if let Some(ref author) = ticket.reported_author_id {
             welcome.push_str(&format!("\nAuthor: <@{}>", author));
@@ -919,6 +981,12 @@ pub fn build_ticket_card(
             welcome.push_str(&format!("\n[Jump to message]({})", url));
         }
     }
+
+    // Discord's 4000-char CV2 limit is the COMBINED total across all text
+    // displays, and an oversize send fails whole — the thread would open with
+    // no card at all. Leave slack for the header and status line.
+    let budget = 3900usize.saturating_sub(header.chars().count() + 120);
+    let welcome = truncate_chars(&welcome, budget);
 
     let priority = Priority::from_str(&ticket.priority);
     let mut status_parts: Vec<String> = vec![];
@@ -975,13 +1043,20 @@ pub fn build_staff_alert_card(cat: &TicketType, ticket: &crate::db::Ticket) -> V
             "-# **#{:04}** opened by <@{}> · <#{}>",
             ticket.ticket_number, ticket.owner_id, ticket.thread_id,
         )),
-        ui::action_row(vec![Button::new(
-            crate::ids::cid_ticket_join(ticket.id),
-            "Join Ticket",
-            ButtonStyle::Primary,
-        )
-        .emoji("🎟️")
-        .into()]),
+        ui::action_row(vec![
+            Button::new(crate::ids::cid_ticket_join(ticket.id), "Join Ticket", ButtonStyle::Primary)
+                .emoji("🎟️")
+                .into(),
+            // For staff who can already see the thread; Join covers everyone else.
+            Button::link(
+                format!(
+                    "https://discord.com/channels/{}/{}",
+                    ticket.guild_id, ticket.thread_id
+                ),
+                "Jump to Ticket",
+            )
+            .into(),
+        ]),
     ])
     .accent(colours::from_hex(&cat.color).0)
     .into()]

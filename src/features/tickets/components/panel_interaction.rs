@@ -61,10 +61,16 @@ pub async fn handle(
         let followup = |msg: String| {
             serenity::CreateInteractionResponseFollowup::new().ephemeral(true).content(msg)
         };
-        // The panel message lives in this channel, so the ticket opens here.
-        let parent_ch = ci.channel_id.expect_channel();
+        // Ticket Channel override wins; otherwise the ticket opens in the
+        // panel's channel (here).
+        let parent_ch = ticket_type
+            .ticket_channel_id
+            .as_ref()
+            .and_then(|s| s.parse::<u64>().ok())
+            .map(serenity::ChannelId::new)
+            .unwrap_or_else(|| ci.channel_id.expect_channel());
 
-        match open_ticket_no_form(ctx, data, guild_id, &ticket_type, ci.user.id, parent_ch).await {
+        match open_ticket_no_form(ctx, data, guild_id, &ticket_type, ci.user.id, ci.user.id, parent_ch).await {
             Ok(opened) => {
                 ci.create_followup(
                     &ctx.http,

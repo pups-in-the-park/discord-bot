@@ -23,8 +23,9 @@ pub async fn handle(
         .to_string();
 
     let target = serenity::UserId::new(target_id).to_user(ctx).await?;
-    // DM before the kick — once they're out of the guild we can't reach them.
     let mod_cfg = data.db.get_or_create_mod_config(&guild_id.to_string()).await?;
+
+    // DM before the kick — once they're out of the guild we can't DM them (50007).
     if mod_cfg.dm_on_kick {
         send_action_dm(&ctx.http, &target, guild_id, ModActionDm::Kick { reason: &reason }, None)
             .await;
@@ -34,6 +35,7 @@ pub async fn handle(
         .kick(&ctx.http, serenity::UserId::new(target_id), Some(&reason))
         .await
         .map_err(|e| anyhow::anyhow!("Failed to kick user: {e}"))?;
+
     let infraction = data
         .db
         .create_infraction(

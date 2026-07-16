@@ -57,8 +57,17 @@ pub async fn ensure_can_manage_role(
     let guild_id = role.guild_id;
 
     // The guild owner sits above the role hierarchy. Copy the id out before any
-    // await so the cache guard from `ctx.guild()` isn't held across a suspension.
-    let owner_id = ctx.guild().map(|g| g.owner_id);
+    // await so the cache guard from `ctx.guild()` isn't held across a suspension;
+    // on a cache miss, fetch — a role-less owner would otherwise fail the
+    // hierarchy check below (author_top = 0).
+    let owner_id = match ctx.guild().map(|g| g.owner_id) {
+        Some(id) => Some(id),
+        None => guild_id
+            .to_partial_guild(ctx.serenity_context())
+            .await
+            .ok()
+            .map(|g| g.owner_id),
+    };
     if owner_id == Some(ctx.author().id) {
         return Ok(());
     }

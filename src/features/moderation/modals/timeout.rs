@@ -30,10 +30,8 @@ pub async fn handle(
 
     let until_str = until.to_rfc3339();
 
-    // Fetch the target and config *before* applying the timeout, so a transient
-    // failure aborts harmlessly instead of leaving the interaction unanswered
-    // after the mute lands (which shows "interaction failed" and invites a
-    // duplicate retry).
+    // Fetch target/config before the timeout — failing after the mute lands
+    // shows "interaction failed" and invites a duplicate retry.
     let target = serenity::UserId::new(target_id).to_user(ctx).await?;
     let mod_cfg = data.db.get_or_create_mod_config(&guild_id.to_string()).await?;
 

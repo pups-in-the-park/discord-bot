@@ -198,6 +198,13 @@ async fn expire_bans_task(http: Arc<serenity::Http>, data: Arc<BotData>, bot_id:
             };
             let guild_id = serenity::GuildId::new(gid);
             let user_id = serenity::UserId::new(uid);
+            // Re-check just before lifting — a re-ban since the batch was
+            // fetched may have retired this row, and lifting it then would
+            // undo a live ban.
+            match data.db.get_infraction_by_id(inf.id).await {
+                Ok(Some(row)) if row.active => {}
+                _ => continue,
+            }
             info!("Lifting expired temporary ban for {} in {}", uid, gid);
             if let Err(e) = features::moderation::service::lift_ban(
                 &http,
@@ -206,13 +213,21 @@ async fn expire_bans_task(http: Arc<serenity::Http>, data: Arc<BotData>, bot_id:
                 user_id,
                 bot_id,
                 "Temporary ban expired",
+                // Only this row — a blanket deactivate could race a re-ban.
+                Some(inf.id),
             )
             .await
             {
-                // Already unbanned manually, or a transient API error — deactivate
-                // the row either way so the task doesn't retry it every cycle.
+                // Retire the row only if the ban is already gone (404). A
+                // transient failure must leave it active for the next cycle to
+                // retry — deactivating would make the temp ban permanent.
                 tracing::warn!("Temp-ban expiry for {} in {}: {:?}", uid, gid, e);
-                data.db.deactivate_active_bans(&inf.guild_id, &inf.user_id).await.ok();
+                let ban_gone = e
+                    .downcast_ref::<serenity::Error>()
+                    .is_some_and(features::moderation::service::error_is_unknown_ban);
+                if ban_gone {
+                    data.db.deactivate_infraction(inf.id).await.ok();
+                }
             }
         }
     }

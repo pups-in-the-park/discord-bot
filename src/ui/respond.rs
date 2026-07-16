@@ -1,7 +1,5 @@
 //! Helpers that put CV2 component trees on the wire: plain messages, interaction
-//! responses, and modal opens. These replace the scattered raw-JSON bodies that
-//! used to live in `util.rs` (`send_cv2`, `ci_respond_cv2`, `ci_update_cv2`,
-//! `mi_update_cv2`, `slash_respond_cv2`, `ci_open_modal`).
+//! responses, and modal opens.
 
 use anyhow::Result;
 use poise::serenity_prelude as serenity;

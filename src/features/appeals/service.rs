@@ -25,6 +25,57 @@ pub async fn resolve(
     let status = if accept { "accepted" } else { "denied" };
     let guild_id = serenity::GuildId::new(appeal.guild_id.parse::<u64>()?);
 
+    // Fetched up front: the accept path needs these before any state changes.
+    let target = data
+        .db
+        .get_infraction_by_id(appeal.infraction_id)
+        .await?
+        .and_then(|inf| {
+            inf.user_id
+                .parse::<u64>()
+                .ok()
+                .map(|u| (inf, serenity::UserId::new(u)))
+        });
+
+    // Lift the Discord ban before resolving anything: if the unban fails we
+    // bail with the appeal still open, rather than DMing "accepted" to someone
+    // who's still banned.
+    let mut invite_url = None;
+    if accept {
+        if let Some((inf, uid)) = &target {
+            if inf.kind == "ban" {
+                if let Err(e) = guild_id.unban(&ctx.http, *uid, None).await {
+                    // 404 = already unbanned manually; still fine to accept.
+                    if !crate::features::moderation::service::error_is_unknown_ban(&e) {
+                        return Err(anyhow::anyhow!(
+                            "Couldn't lift the ban: {e}. The appeal is still open."
+                        ));
+                    }
+                }
+                data.ban_cache.invalidate(guild_id);
+                data.db
+                    .create_infraction(
+                        &guild_id.to_string(),
+                        &uid.to_string(),
+                        &moderator.to_string(),
+                        "unban",
+                        &format!("Appeal accepted: {}", response),
+                        None,
+                        false,
+                        None,
+                    )
+                    .await
+                    .ok();
+                // Clear the active ban so the temp-ban expiry task won't re-process it.
+                data.db
+                    .deactivate_active_bans(&guild_id.to_string(), &uid.to_string())
+                    .await
+                    .ok();
+                invite_url = make_rejoin_invite(ctx, guild_id).await;
+            }
+        }
+    }
+
     data.db
         .resolve_appeal(appeal.id, status, response, &moderator.to_string())
         .await?;
@@ -59,47 +110,22 @@ pub async fn resolve(
             .ok();
     }
 
-    let infraction = data.db.get_infraction_by_id(appeal.infraction_id).await?;
-    let Some(inf) = infraction else {
-        return Ok(());
-    };
-    let Ok(uid) = inf.user_id.parse::<u64>().map(serenity::UserId::new) else {
-        return Ok(());
-    };
-
-    if accept {
-        let mut invite_url = None;
-        if inf.kind == "ban" {
-            guild_id.unban(&ctx.http, uid, None).await.ok();
-            data.db
-                .create_infraction(
-                    &guild_id.to_string(),
-                    &uid.to_string(),
-                    &moderator.to_string(),
-                    "unban",
-                    &format!("Appeal accepted: {}", response),
-                    None,
-                    false,
-                    None,
+    if let Some((_inf, uid)) = &target {
+        if accept {
+            if let Ok(user) = uid.to_user(ctx).await {
+                super::view::notify_appeal_resolved(
+                    &ctx.http,
+                    &user,
+                    status,
+                    response,
+                    invite_url.as_deref(),
                 )
-                .await
-                .ok();
-            // Clear the active ban so the temp-ban expiry task won't re-process it.
-            data.db.deactivate_active_bans(&guild_id.to_string(), &uid.to_string()).await.ok();
-            invite_url = make_rejoin_invite(ctx, guild_id).await;
+                .await;
+            }
+        } else if let Ok(user) = uid.to_user(ctx).await {
+            super::view::notify_appeal_denied(&ctx.http, &user, guild_id, response, appeal.id)
+                .await;
         }
-        if let Ok(user) = uid.to_user(ctx).await {
-            super::view::notify_appeal_resolved(
-                &ctx.http,
-                &user,
-                status,
-                response,
-                invite_url.as_deref(),
-            )
-            .await;
-        }
-    } else if let Ok(user) = uid.to_user(ctx).await {
-        super::view::notify_appeal_denied(&ctx.http, &user, guild_id, response, appeal.id).await;
     }
 
     Ok(())

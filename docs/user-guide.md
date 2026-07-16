@@ -28,7 +28,8 @@ Tickets are private threads between you and the moderation team. You can open on
 
 Once a ticket is open, you can:
 - Chat with staff inside the thread
-- `/ticket close` — close your own ticket when your issue is resolved
+- `/ticket close` — close your own ticket when your issue is resolved. (If a
+  staff member opened the ticket for you, only staff can close it.)
 - `/ticket add <user>` — invite another member into your ticket thread
 - `/ticket remove <user>` — remove a member you added
 
@@ -85,7 +86,8 @@ The **ticket card** at the top of each thread has the quick controls: **Claim**
 (shows "Claimed by @you" and disables until `/ticket unclaim`), **Close**, and a
 **priority dropdown** (staff only). If the category has a staff-alert channel, a
 card is posted there for each new ticket with a **🎟️ Join Ticket** button — it
-adds you to the thread, or just takes you there if you're already in.
+adds you to the thread, or just takes you there if you're already in — and a
+**Jump to Ticket** link for staff who can already see the thread.
 
 Inside any ticket thread, staff can also use:
 
@@ -208,9 +210,19 @@ The config panel is split into three tabs, swapped in place:
 - **Overview** — basic info (label, emoji, colour, description — the same modal as
   Create, prefilled), the welcome message, the thread-name pattern, and **Delete**
   (with confirmation). Each row shows the current value next to its **Edit** button.
-- **Behaviour** — **Staff Roles** (pinged once and pulled into each new ticket
-  thread), the staff-alert channel, and limits (max open per user — set **0 for
-  unlimited** — and auto-close).
+- **Behaviour** — **Staff Roles** plus two toggles that decide how they hear
+  about new tickets: **Auto-Add Staff** (ping the roles inside each new thread —
+  the mention also pulls them into the private thread), and **Notify Staff**
+  (when Auto-Add is off, ping the roles alongside the alert-channel card; with
+  both off, staff aren't pinged at all). Also the staff-alert channel, a
+  **Ticket Channel** override (where this category's tickets open — leave unset
+  to use its panel's channel; set it for **staff-only categories** that aren't
+  on any panel and are opened purely via the context menus), and limits (max
+  open per user — set **0 for unlimited** — and auto-close).
+
+  Tickets opened *for* a member by staff (via the context menus) can only be
+  closed by staff — the member can't dismiss a verification, conduct, or
+  welfare thread themselves.
 - **Questions** — the intake-form questions (up to 5). There's no on/off switch:
   the form shows whenever the category has questions, and is skipped when it has
   none.

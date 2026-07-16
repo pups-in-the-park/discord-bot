@@ -25,12 +25,16 @@ pub async fn close(
         return Err(Error::user("This ticket is already closed."));
     }
 
-    let is_staff =
-        crate::permissions::is_mod_staff(ctx.serenity_context(), &ctx.data(), guild_id, ctx.author().id).await;
-
-    let is_owner = ticket.owner_id == ctx.author().id.to_string();
-    if !is_staff && !is_owner {
-        return Err(Error::user("Only staff or the ticket owner can close this ticket."));
+    if !super::super::service::user_may_close(
+        ctx.serenity_context(),
+        &ctx.data(),
+        Some(guild_id),
+        &ticket,
+        ctx.author().id,
+    )
+    .await
+    {
+        return Err(Error::user(super::super::service::close_denied_message(&ticket)));
     }
 
     if let Some(reason) = reason {

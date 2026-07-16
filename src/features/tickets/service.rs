@@ -18,6 +18,9 @@ pub struct OpenThreadOptions<'a> {
     pub ticket_type: &'a TicketType,
     pub ticket_number: i64,
     pub owner_id: serenity::UserId,
+    /// The owner on panel flows, the staff member on context-menu flows.
+    /// Staff-opened tickets are staff-close-only.
+    pub opened_by: serenity::UserId,
     pub parent_channel_id: serenity::ChannelId,
     pub form_responses: Option<serde_json::Map<String, serde_json::Value>>,
     pub reported_message_id: Option<serenity::MessageId>,
@@ -106,6 +109,7 @@ pub async fn open_thread(
             &thread.id.to_string(),
             &opts.parent_channel_id.to_string(),
             &opts.owner_id.to_string(),
+            &opts.opened_by.to_string(),
             form_json.as_deref(),
             reported_msg_id.as_deref(),
             opts.reported_message_url.as_deref(),
@@ -127,14 +131,14 @@ pub async fn open_thread(
         .await
         .unwrap_or_default();
 
-    // Build ping content (sent as plain message so it actually notifies). This
-    // is the *single* staff ping for the ticket: mentioning a role in a private
-    // thread auto-adds every role member who can view the parent channel, so
-    // one mention both notifies staff and pulls them in. Non-mentionable roles
-    // need the bot to have Mention Everyone in the parent channel; that's
-    // surfaced as a warning at panel publish time.
+    // In-thread ping: the owner, plus the staff roles when Auto-Add is on —
+    // mentioning a role in a private thread pulls its members in, so one
+    // mention both notifies and adds. (Non-mentionable roles need the bot to
+    // have Mention Everyone; warned about at panel publish time.)
     let mut ping_parts: Vec<String> = vec![format!("<@{}>", opts.owner_id)];
-    ping_parts.extend(staff_roles.iter().map(|r| format!("<@&{}>", r)));
+    if opts.ticket_type.auto_add_staff {
+        ping_parts.extend(staff_roles.iter().map(|r| format!("<@&{}>", r)));
+    }
     let ping_content = ping_parts.join(" ");
 
     thread
@@ -162,14 +166,14 @@ pub async fn open_thread(
         Err(e) => warn!("Couldn't post the ticket card in thread {}: {e}", thread.id),
     }
 
-    // Per-type staff alert: a card with a Join button, preceded by a role ping so
-    // a configured alert channel actually notifies. The in-thread mention only
-    // reaches staff already added to the private thread, so a dedicated alert
-    // channel needs its own ping to be useful.
+    // Staff alert card. Only ping alongside it when auto-add is off and notify
+    // is on — auto-add already pinged in-thread, and notify-off means the
+    // admin asked for a quiet channel.
     if let Some(ref ch) = opts.ticket_type.staff_alert_channel_id {
         if let Ok(cid) = ch.parse::<u64>() {
             let alert_ch = serenity::ChannelId::new(cid);
-            if !staff_roles.is_empty() {
+            let ping_alert = !opts.ticket_type.auto_add_staff && opts.ticket_type.notify_staff;
+            if ping_alert && !staff_roles.is_empty() {
                 let mentions = staff_roles
                     .iter()
                     .map(|r| format!("<@&{}>", r))
@@ -199,11 +203,9 @@ pub async fn open_thread(
     Ok(OpenedThread { thread })
 }
 
-/// Reason a member may not open a ticket of this type right now, or `None` if
-/// they may. Shared by the panel button/select path and the intake-form submit
-/// path: the button check runs before the modal is shown, so re-checking at
-/// submit stops a rapid re-click (or a block added meanwhile) from slipping a
-/// ticket past the per-user limit or blocklist.
+/// Reason a member may not open a ticket of this type, or `None`. Checked at
+/// the panel button *and* again at form submit — a rapid re-click (or a block
+/// added meanwhile) could otherwise slip past the limit/blocklist.
 pub async fn ticket_open_block_reason(
     data: &Arc<BotData>,
     guild_id: serenity::GuildId,
@@ -289,10 +291,8 @@ pub async fn execute_close(
     closed_by: serenity::UserId,
     reason: Option<&str>,
 ) -> Result<()> {
-    // Idempotency guard at the shared choke point: every caller (command, modal,
-    // card button) routes through here, so re-closing an already-closed ticket
-    // (e.g. clicking a stale Close button) is a harmless no-op rather than a
-    // duplicate close embed + log entry.
+    // Every close path routes through here, so a stale Close button re-closing
+    // an already-closed ticket is a harmless no-op.
     if ticket.status == crate::db::TicketStatus::Closed {
         return Ok(());
     }
@@ -409,11 +409,16 @@ pub async fn resolve_parent_for_type(
     data: &Arc<BotData>,
     ticket_type: &TicketType,
 ) -> Result<serenity::ChannelId> {
+    // Per-category override wins — lets a staff-only category exist off-panel.
+    if let Some(c) = ticket_type.ticket_channel_id.as_ref().and_then(|s| s.parse::<u64>().ok()) {
+        return Ok(serenity::ChannelId::new(c));
+    }
     let panel = data.db.get_panel_for_type(ticket_type.id).await?;
     let Some(panel) = panel else {
         anyhow::bail!(
-            "The **{}** category isn't on any ticket panel yet. Add it to a panel and \
-             publish the panel before opening tickets in this category.",
+            "The **{}** category isn't on any ticket panel and has no Ticket Channel set. \
+             Either set a Ticket Channel on its Behaviour tab, or add it to a panel and \
+             publish the panel.",
             ticket_type.label,
         );
     };
@@ -441,6 +446,7 @@ pub async fn open_ticket_no_form(
     guild_id: serenity::GuildId,
     ticket_type: &TicketType,
     owner_id: serenity::UserId,
+    opened_by: serenity::UserId,
     parent_channel_id: serenity::ChannelId,
 ) -> Result<OpenedThread> {
     let ticket_number = data.db.next_ticket_number(&guild_id.to_string()).await?;
@@ -452,6 +458,7 @@ pub async fn open_ticket_no_form(
             ticket_type,
             ticket_number,
             owner_id,
+            opened_by,
             parent_channel_id,
             form_responses: None,
             reported_message_id: None,
@@ -461,6 +468,40 @@ pub async fn open_ticket_no_form(
         },
     )
     .await
+}
+
+/// Close policy shared by `/ticket close`, the card's Close button, and the
+/// close modal: staff always may; the owner only if they opened the ticket
+/// themselves (staff-opened tickets are staff-close-only).
+pub async fn user_may_close(
+    ctx: &serenity::Context,
+    data: &Arc<BotData>,
+    guild_id: Option<serenity::GuildId>,
+    ticket: &crate::db::Ticket,
+    user_id: serenity::UserId,
+) -> bool {
+    if ticket.owner_id == user_id.to_string() && !ticket.staff_opened() {
+        return true;
+    }
+    // The opener may always close. The context menus are gated by Discord
+    // perms, which may not match the configured staff-role list — without this
+    // a ticket could end up closeable by no one.
+    if ticket.opened_by.as_deref() == Some(user_id.to_string().as_str()) {
+        return true;
+    }
+    match guild_id {
+        Some(g) => crate::permissions::is_mod_staff(ctx, data, g, user_id).await,
+        None => false,
+    }
+}
+
+/// The matching refusal copy for [`user_may_close`].
+pub fn close_denied_message(ticket: &crate::db::Ticket) -> &'static str {
+    if ticket.staff_opened() {
+        "This ticket was opened by staff — only staff can close it."
+    } else {
+        "Only staff or the ticket owner can close this ticket."
+    }
 }
 
 /// Read intake-form responses out of a submitted modal, keyed by field label.

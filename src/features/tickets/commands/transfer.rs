@@ -34,5 +34,13 @@ pub async fn transfer(
             .content(format!("🔀 Ticket transferred to **{}**.", new_type.label)),
     )
     .await?;
+
+    // The card shows the category's label/colour — re-render after responding
+    // (3s window), like claim/priority do.
+    if let Ok(Some(fresh)) = ctx.data().db.get_ticket_by_id(ticket.id).await {
+        super::super::service::refresh_ticket_card(&ctx.serenity_context().http, &ctx.data(), &fresh)
+            .await
+            .ok();
+    }
     Ok(())
 }

@@ -18,15 +18,19 @@ pub async fn autocomplete_banned_user<'a>(
     let data = ctx.data();
     let bans = match data.ban_cache.get(guild_id) {
         Some(bans) => bans,
-        None => match guild_id
-            .bans(&ctx.serenity_context().http, None, serenity::nonmax::NonMaxU16::new(1000))
-            .await
-        {
-            Ok(fetched) => data.ban_cache.put(guild_id, fetched),
-            // Don't cache on failure — an empty list would then stick for the whole
-            // TTL and blank out autocomplete even after Discord recovers.
-            Err(_) => return serenity::CreateAutocompleteResponse::new(),
-        },
+        None => {
+            // Snapshot the generation so `put` can detect an invalidation mid-fetch.
+            let generation = data.ban_cache.generation();
+            match guild_id
+                .bans(&ctx.serenity_context().http, None, serenity::nonmax::NonMaxU16::new(1000))
+                .await
+            {
+                Ok(fetched) => data.ban_cache.put(guild_id, fetched, generation),
+                // Don't cache on failure — an empty list would then stick for the whole
+                // TTL and blank out autocomplete even after Discord recovers.
+                Err(_) => return serenity::CreateAutocompleteResponse::new(),
+            }
+        }
     };
     let p = partial.to_lowercase();
     let choices: Vec<_> = bans
@@ -82,6 +86,7 @@ pub async fn unban(
         uid,
         ctx.author().id,
         &reason,
+        None,
     )
     .await
     .map_err(|e| Error::user(format!("Failed to unban: {}", e)))?;

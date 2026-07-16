@@ -38,11 +38,17 @@ pub(crate) async fn open_ticket_for_user(
             None => open_without_form(ctx, &active[0], target_id).await?,
         }
     } else {
-        // Send an ephemeral select-menu so staff can pick the category.
+        // Ephemeral select so staff pick the category. Cap options/labels like
+        // the panel selects — a 26th option or 101-char label 400s the reply.
         let options: Vec<serenity::CreateSelectMenuOption> = active
             .iter()
+            .take(25)
             .map(|t| {
-                serenity::CreateSelectMenuOption::new(&t.label, t.id.to_string()).description(
+                serenity::CreateSelectMenuOption::new(
+                    t.label.chars().take(100).collect::<String>(),
+                    t.id.to_string(),
+                )
+                .description(
                     t.description.as_deref().unwrap_or("").chars().take(100).collect::<String>(),
                 )
             })
@@ -94,6 +100,7 @@ async fn open_without_form(
         guild_id,
         ticket_type,
         target_id,
+        ctx.author().id,
         parent_ch,
     )
     .await?;

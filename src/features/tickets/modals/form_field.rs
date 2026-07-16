@@ -39,6 +39,43 @@ fn read_submission(mi: &serenity::ModalInteraction) -> Submission {
     Submission { label, required, placeholder, options_json, has_choices_field }
 }
 
+/// Discord rejects selects/checkboxes with >25 options or >100-char labels —
+/// at ticket-open time, taking the whole category down. Catch it at authoring.
+fn choices_error(sub: &Submission) -> Option<String> {
+    let options: Vec<String> = sub
+        .options_json
+        .as_deref()
+        .and_then(|j| serde_json::from_str(j).ok())
+        .unwrap_or_default();
+    if options.len() > 25 {
+        return Some(format!(
+            "Discord allows at most 25 choices per question — you listed {}.",
+            options.len()
+        ));
+    }
+    if let Some(long) = options.iter().find(|o| o.chars().count() > 100) {
+        return Some(format!(
+            "Each choice must be 100 characters or fewer — \"{}…\" is too long.",
+            long.chars().take(30).collect::<String>()
+        ));
+    }
+    // Discord also rejects duplicate values. Compare lowercased, first 100
+    // chars only — the render-time cap can collapse two long choices.
+    let mut seen = std::collections::HashSet::new();
+    for o in &options {
+        let key: String = o.trim().to_lowercase().chars().take(100).collect();
+        if !seen.insert(key) {
+            let snippet: String = o.chars().take(30).collect();
+            return Some(format!(
+                "Choices must be unique — \"{}{}\" appears more than once.",
+                snippet,
+                if o.chars().count() > 30 { "…" } else { "" }
+            ));
+        }
+    }
+    None
+}
+
 /// `m:ff:new:{type_id}:{style}` — create an intake question in one step: the type
 /// was picked from the Questions-tab select, so the modal collects everything
 /// (label, required, placeholder, and choices for dropdown/checkbox questions).
@@ -62,10 +99,20 @@ pub async fn handle_new(
         respond_ephemeral_modal(ctx, mi, "Add at least one choice (one per line) — the question wasn't created.").await;
         return Ok(());
     }
+    if let Some(err) = choices_error(&sub) {
+        respond_ephemeral_modal(ctx, mi, &format!("{err} The question wasn't created.")).await;
+        return Ok(());
+    }
 
+    let existing = data.db.get_form_fields(type_id).await?;
     // Guard the 5-question Discord modal limit.
-    if data.db.count_form_fields(type_id).await? >= 5 {
+    if existing.len() >= 5 {
         respond_ephemeral_modal(ctx, mi, "This category already has the maximum of 5 questions.").await;
+        return Ok(());
+    }
+    // Responses are keyed by label — a duplicate would swallow an answer.
+    if existing.iter().any(|f| f.label.eq_ignore_ascii_case(&sub.label)) {
+        respond_ephemeral_modal(ctx, mi, "This category already has a question with that label — pick a different one.").await;
         return Ok(());
     }
 
@@ -109,6 +156,20 @@ pub async fn handle_edit(
     }
     if sub.has_choices_field && sub.options_json.is_none() {
         respond_ephemeral_modal(ctx, mi, "Add at least one choice (one per line) — nothing was changed.").await;
+        return Ok(());
+    }
+    if let Some(err) = choices_error(&sub) {
+        respond_ephemeral_modal(ctx, mi, &format!("{err} Nothing was changed.")).await;
+        return Ok(());
+    }
+    // Responses are keyed by label — renaming onto another question's label
+    // would swallow an answer.
+    let siblings = data.db.get_form_fields(field.ticket_type_id).await?;
+    if siblings
+        .iter()
+        .any(|f| f.id != field_id && f.label.eq_ignore_ascii_case(&sub.label))
+    {
+        respond_ephemeral_modal(ctx, mi, "Another question in this category already has that label — nothing was changed.").await;
         return Ok(());
     }
 

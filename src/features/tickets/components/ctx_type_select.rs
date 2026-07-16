@@ -79,6 +79,7 @@ pub async fn handle(
             ticket_type: &ticket_type,
             ticket_number,
             owner_id: serenity::UserId::new(target_user_id),
+            opened_by: ci.user.id,
             parent_channel_id: parent_ch,
             form_responses: None,
             reported_message_id: None,

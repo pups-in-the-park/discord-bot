@@ -77,8 +77,8 @@ pub fn modal_input(
 }
 
 /// Preset timeout durations offered in moderation/report modals, as `(label, seconds)`.
-/// A select of these replaces free-text duration entry (a *choice* is a select, per
-/// the UI conventions — and it avoids the seconds-vs-`"5min"` parse mismatch).
+/// A select of these replaces free-text duration entry — no seconds-vs-`"5min"`
+/// parse mismatch.
 pub const DURATION_PRESETS: &[(&str, i64)] = &[
     ("60 seconds", 60),
     ("5 minutes", 300),
@@ -98,11 +98,9 @@ pub const DELETE_WINDOW_PRESETS: &[(&str, i64)] = &[
     ("Last 7 days", 604_800),
 ];
 
-/// Build a `Label`-wrapped single-select from arbitrary `(label, value)` integer
-/// presets (seconds, days, counts, …), pre-selecting the option whose value equals
-/// `default`. Option values are the numbers themselves; read the choice back with
-/// [`modal_secs`]. Use this to turn a numeric config field into a dropdown of
-/// sensible choices.
+/// `Label`-wrapped single-select over `(label, value)` integer presets,
+/// pre-selecting the option matching `default`. Option values are the numbers
+/// themselves; read the choice back with [`modal_secs`].
 pub fn preset_select(
     label: &str,
     custom_id: &str,

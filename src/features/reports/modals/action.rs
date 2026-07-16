@@ -54,11 +54,9 @@ pub async fn handle(
     )
     .await?;
 
-    // Resolve the target and mod config once, up front — before any irreversible
-    // action. A transient failure here aborts before we've touched anything, so
-    // the report stays open for a clean retry; doing it per-arm *after* the
-    // Discord action (as before) would skip the shared resolve/archive/notify
-    // block below and leave the report stuck "open".
+    // Resolve target/config before any irreversible action — a transient
+    // failure here aborts cleanly with the report still open, instead of
+    // skipping the shared resolve/archive/notify block below.
     let target = serenity::UserId::new(target_id).to_user(ctx).await?;
     let mod_cfg = data.db.get_or_create_mod_config(&guild_id.to_string()).await?;
 
@@ -160,14 +158,19 @@ pub async fn handle(
             )
             .map_err(|_| anyhow::anyhow!("Invalid timestamp"))?;
             let until_str = until.to_rfc3339();
-            guild_id
+            // If Discord refuses (hierarchy, missing perms), stop with the report
+            // still open — don't record an action that never happened.
+            if let Err(e) = guild_id
                 .edit_member(
                     &ctx.http,
                     serenity::UserId::new(target_id),
                     serenity::EditMember::new().disable_communication_until(until),
                 )
                 .await
-                .ok();
+            {
+                fail_followup(ctx, mi, report_id, "time out", &e).await;
+                return Ok(());
+            }
             let infraction = data
                 .db
                 .create_infraction(
@@ -214,7 +217,7 @@ pub async fn handle(
             .await;
         }
         "kick" => {
-            // DM before the kick — once they're out of the guild we can't reach them.
+            // DM before the kick — once they're out of the guild we can't DM them (50007).
             if mod_cfg.dm_on_kick {
                 crate::features::moderation::service::send_action_dm(
                     &ctx.http,
@@ -225,10 +228,13 @@ pub async fn handle(
                 )
                 .await;
             }
-            guild_id
+            if let Err(e) = guild_id
                 .kick(&ctx.http, serenity::UserId::new(target_id), Some(&reason))
                 .await
-                .ok();
+            {
+                fail_followup(ctx, mi, report_id, "kick", &e).await;
+                return Ok(());
+            }
             let infraction = data
                 .db
                 .create_infraction(
@@ -260,46 +266,28 @@ pub async fn handle(
             let duration_secs = crate::util::modal_secs(&mi.data.components, "duration").unwrap_or(0);
             let (dur, expires_at, until_ts) =
                 crate::features::moderation::service::ban_expiry(duration_secs);
-            guild_id
-                .ban(&ctx.http, serenity::UserId::new(target_id), 0, Some(&reason))
-                .await
-                .ok();
-            // A new ban supersedes any active one — deactivate older ban
-            // infractions first, or an earlier temp ban's expiry would lift it.
-            // Best-effort so a transient failure can't skip recording the new
-            // ban's expiry (which would leave the user banned forever).
-            data.db
-                .deactivate_active_bans(&guild_id.to_string(), &target_id.to_string())
-                .await
-                .ok();
-            let infraction = data
-                .db
-                .create_infraction(
-                    &guild_id.to_string(),
-                    &target_id.to_string(),
-                    &mi.user.id.to_string(),
-                    "ban",
-                    &reason,
-                    dur,
-                    appealable,
-                    expires_at.as_deref(),
-                )
-                .await?;
-            if mod_cfg.dm_on_ban {
-                let appeal_info = if appealable {
-                    Some((infraction.id, guild_id))
-                } else {
-                    None
-                };
-                crate::features::moderation::service::send_action_dm(
-                    &ctx.http,
-                    &target,
-                    guild_id,
-                    crate::features::moderation::service::ModActionDm::Ban { reason: &reason, until: until_ts },
-                    appeal_info,
-                )
-                .await;
-            }
+            let infraction = match crate::features::moderation::service::apply_ban(
+                &ctx.http,
+                data,
+                guild_id,
+                &target,
+                mi.user.id,
+                &reason,
+                0,
+                dur,
+                expires_at.as_deref(),
+                until_ts,
+                appealable,
+                mod_cfg.dm_on_ban,
+            )
+            .await
+            {
+                Ok(infraction) => infraction,
+                Err(e) => {
+                    fail_followup(ctx, mi, report_id, "ban", &e).await;
+                    return Ok(());
+                }
+            };
             let length = match until_ts {
                 Some(ts) => format!("Temporary — lifts <t:{}:R> · via report #{}", ts, report_id),
                 None => format!("Permanent · via report #{}", report_id),
@@ -342,5 +330,26 @@ pub async fn handle(
     .await
     .ok();
     Ok(())
+}
+
+/// Tell the moderator the Discord action failed; the report stays open.
+async fn fail_followup(
+    ctx: &serenity::Context,
+    mi: &serenity::ModalInteraction,
+    report_id: i64,
+    verb: &str,
+    err: impl std::fmt::Display,
+) {
+    mi.create_followup(
+        &ctx.http,
+        serenity::CreateInteractionResponseFollowup::new()
+            .ephemeral(true)
+            .content(format!(
+                "Couldn't {} that user: {}. Report #{} is still open.",
+                verb, err, report_id
+            )),
+    )
+    .await
+    .ok();
 }
 

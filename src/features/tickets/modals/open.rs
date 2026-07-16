@@ -39,9 +39,14 @@ pub async fn handle(
     let fields = data.db.get_form_fields(ticket_type_id).await?;
     let responses = collect_form_responses(&mi.data.components, &fields);
 
-    // The modal was submitted from the panel message, so its channel is the
-    // panel's channel — the ticket opens there.
-    let parent_ch = mi.channel_id.expect_channel();
+    // Ticket Channel override wins; otherwise the ticket opens in the panel's
+    // channel (where this modal was submitted).
+    let parent_ch = ticket_type
+        .ticket_channel_id
+        .as_ref()
+        .and_then(|s| s.parse::<u64>().ok())
+        .map(serenity::ChannelId::new)
+        .unwrap_or_else(|| mi.channel_id.expect_channel());
 
     // Creating the thread + card can exceed the 3-second window — acknowledge first.
     mi.create_response(
@@ -61,6 +66,7 @@ pub async fn handle(
             ticket_type: &ticket_type,
             ticket_number,
             owner_id: mi.user.id,
+            opened_by: mi.user.id,
             parent_channel_id: parent_ch,
             form_responses: if responses.is_empty() { None } else { Some(responses) },
             reported_message_id: None,

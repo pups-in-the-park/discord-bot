@@ -59,6 +59,7 @@ pub async fn handle(
             ticket_type: &ticket_type,
             ticket_number,
             owner_id,
+            opened_by: mi.user.id,
             parent_channel_id: parent_ch,
             form_responses: if responses.is_empty() { None } else { Some(responses) },
             reported_message_id: None,

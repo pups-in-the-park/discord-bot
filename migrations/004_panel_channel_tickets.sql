@@ -2,12 +2,9 @@
 -- global "ticket parent channel" is gone.
 ALTER TABLE guild_config DROP COLUMN ticket_channel_id;
 
--- One panel per category: dedupe existing links, preferring a published panel
--- (message_id set), then the oldest panel. panel_ticket_types is a rowid table,
--- so rowid addressing works. Panels that lose a category here keep a stale
--- button on their live message until republished — harmless, since the panel
--- button path opens tickets in the interaction's own channel and never reads
--- this table.
+-- One panel per category: dedupe existing links, preferring a published panel,
+-- then the oldest. A panel that loses a category keeps a stale button until
+-- republished — harmless, the button path never reads this table.
 DELETE FROM panel_ticket_types
 WHERE rowid NOT IN (
     SELECT keep_rowid FROM (

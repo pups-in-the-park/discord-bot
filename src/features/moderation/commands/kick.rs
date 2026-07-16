@@ -19,6 +19,8 @@ pub async fn kick(
     validate_target(&ctx, &user).await?;
 
     let mod_cfg = ctx.data().db.get_or_create_mod_config(&gid).await?;
+
+    // DM before the kick — once they're out of the guild we can't DM them (50007).
     if mod_cfg.dm_on_kick {
         send_action_dm(
             &ctx.serenity_context().http,

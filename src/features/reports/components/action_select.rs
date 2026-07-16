@@ -38,9 +38,8 @@ pub async fn handle(
     }
 
     // Message-specific actions only apply when the report references a message.
-    // The action picker is inline (not a modal select) on purpose: the chosen
-    // action drives which modal fields appear next — only an inline select can do
-    // that. Built as a CV2 container via the ui:: kit, per the UI conventions.
+    // The picker is inline (not a modal select) on purpose: the chosen action
+    // drives which modal fields appear next, which only an inline select can do.
     let mut options = Vec::new();
     if report.message_url.is_some() {
         options.push(SelectOption::new("del", "Delete message"));

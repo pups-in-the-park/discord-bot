@@ -17,15 +17,26 @@ pub async fn handle(
     let Some(guild_id) = ci.guild_id else {
         return Ok(());
     };
-    if !crate::permissions::is_mod_staff(ctx, data, guild_id, ci.user.id).await {
-        respond_ephemeral(ctx, ci, "Only staff can join tickets from here.").await;
-        return Ok(());
-    }
 
     let Some(ticket) = data.db.get_ticket_by_id(ticket_id).await? else {
         respond_ephemeral(ctx, ci, "That ticket no longer exists.").await;
         return Ok(());
     };
+
+    // The category's staff roles may not be in the guild mod-staff list — accept either.
+    let mut allowed = crate::permissions::is_mod_staff(ctx, data, guild_id, ci.user.id).await;
+    if !allowed {
+        if let Some(type_id) = ticket.ticket_type_id {
+            let type_roles = data.db.get_type_roles(type_id).await.unwrap_or_default();
+            allowed = ci.member.as_ref().is_some_and(|m| {
+                m.roles.iter().any(|r| type_roles.contains(&r.to_string()))
+            });
+        }
+    }
+    if !allowed {
+        respond_ephemeral(ctx, ci, "Only staff can join tickets from here.").await;
+        return Ok(());
+    }
     let Ok(thread_id) = ticket.thread_id.parse::<u64>() else {
         respond_ephemeral(ctx, ci, "That ticket's thread can't be found.").await;
         return Ok(());

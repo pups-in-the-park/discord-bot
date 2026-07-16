@@ -169,11 +169,9 @@ pub async fn handle(
                 ));
             }
 
-            // Best-effort pre-flight from the cache: right channel type and the
-            // perms the bot needs to post the panel and open ticket threads
-            // there. Cache misses fall through — the channel picker already
-            // restricts to text channels, and thread creation reports a friendly
-            // error at open time.
+            // Best-effort pre-flight from the cache: channel type + the perms
+            // needed to post the panel and open threads. Cache misses fall
+            // through — errors surface at ticket-open time anyway.
             let bot_id = ctx.cache.current_user().id;
             if let Ok(bot_member) = guild_id.member(ctx, bot_id).await {
                 // Copy what we need out of the cache guard before any await.

@@ -92,6 +92,17 @@ pub async fn handle(
             show_config_form(&ctx.http, data, ci.id, &ci.token, type_id, ConfigTab::Behaviour).await?;
         }
 
+        // Channel select — where this category's tickets open (clear = use panel)
+        "ticket_ch" => {
+            let ch = if let serenity::ComponentInteractionDataKind::ChannelSelect { values } = &ci.data.kind {
+                values.first().map(|c| c.to_string())
+            } else {
+                None
+            };
+            data.db.set_ticket_type_channel(type_id, ch.as_deref()).await?;
+            show_config_form(&ctx.http, data, ci.id, &ci.token, type_id, ConfigTab::Behaviour).await?;
+        }
+
         // Channel select — save staff alert channel
         "alert_ch" => {
             let ch = if let serenity::ComponentInteractionDataKind::ChannelSelect { values } = &ci.data.kind {
@@ -100,6 +111,20 @@ pub async fn handle(
                 None
             };
             data.db.set_staff_alert_channel(type_id, ch.as_deref()).await?;
+            show_config_form(&ctx.http, data, ci.id, &ci.token, type_id, ConfigTab::Behaviour).await?;
+        }
+
+        // Staff-notification toggles — flip and re-render
+        "auto_add" => {
+            let cat = data.db.get_ticket_type_by_id(type_id).await?
+                .ok_or_else(|| anyhow::anyhow!("Category not found"))?;
+            data.db.set_ticket_type_auto_add_staff(type_id, !cat.auto_add_staff).await?;
+            show_config_form(&ctx.http, data, ci.id, &ci.token, type_id, ConfigTab::Behaviour).await?;
+        }
+        "notify" => {
+            let cat = data.db.get_ticket_type_by_id(type_id).await?
+                .ok_or_else(|| anyhow::anyhow!("Category not found"))?;
+            data.db.set_ticket_type_notify_staff(type_id, !cat.notify_staff).await?;
             show_config_form(&ctx.http, data, ci.id, &ci.token, type_id, ConfigTab::Behaviour).await?;
         }
 
